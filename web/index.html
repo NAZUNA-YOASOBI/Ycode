@@ -359,9 +359,9 @@
 
     .work-group {
       border: 1px solid var(--line);
-      border-left: 3px solid #9d83d8;
+      border-left: 3px solid #c18aa8;
       border-radius: 13px;
-      background: #1b1722;
+      background: #241b24;
       overflow: hidden;
     }
 
@@ -398,7 +398,7 @@
     }
 
     .work-group > summary {
-      color: #c5b1f2;
+      color: #e0b6d0;
     }
 
     .work-group > summary,
@@ -432,12 +432,12 @@
     }
 
     .event.reasoning {
-      border-left-color: #b38be1;
-      background: #211b2b;
+      border-left-color: #79a7d3;
+      background: #1c222b;
     }
 
     .event.reasoning .event-header {
-      color: #d1b7ef;
+      color: #b9d3ee;
     }
 
     .event.reasoning > summary {
@@ -510,6 +510,10 @@
     .event.final {
       border-left-color: var(--purple);
       background: #1f1a28;
+    }
+
+    .event.final .event-header {
+      color: #d1bdf4;
     }
 
     .event.error {
@@ -1903,6 +1907,7 @@
 
     async function runTask(task) {
       isRunning = true;
+      activeProcess = null;
       activeToolGroup = null;
       pendingToolSteps = [];
       pendingToolEvent = null;
