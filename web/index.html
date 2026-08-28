@@ -357,6 +357,15 @@
       overflow: hidden;
     }
 
+    .work-group {
+      border: 1px solid var(--line);
+      border-left: 3px solid #9d83d8;
+      border-radius: 13px;
+      background: #1b1722;
+      overflow: hidden;
+    }
+
+    .work-group > summary,
     .event > summary,
     .tool-event > summary,
     .tool-part > summary {
@@ -364,12 +373,14 @@
       cursor: pointer;
     }
 
+    .work-group > summary::-webkit-details-marker,
     .event > summary::-webkit-details-marker,
     .tool-event > summary::-webkit-details-marker,
     .tool-part > summary::-webkit-details-marker {
       display: none;
     }
 
+    .work-group > summary::after,
     .event > summary::after,
     .tool-event > summary::after,
     .tool-part > summary::after {
@@ -379,14 +390,62 @@
       font: 16px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
+    .work-group[open] > summary::after,
     .event[open] > summary::after,
     .tool-event[open] > summary::after,
     .tool-part[open] > summary::after {
       content: "-";
     }
 
+    .work-group > summary {
+      color: #c5b1f2;
+    }
+
+    .work-group > summary,
+    .work-group-body {
+      padding-left: 14px;
+      padding-right: 14px;
+    }
+
+    .work-group-body {
+      display: grid;
+      gap: 8px;
+      padding-top: 10px;
+      padding-bottom: 12px;
+    }
+
+    .work-group > summary {
+      border-bottom: 0;
+    }
+
+    .work-group[open] > summary {
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .work-group-body > .step-divider {
+      margin: 0;
+      padding: 2px 0;
+    }
+
     .event.model {
       border-left-color: #77a6bf;
+    }
+
+    .event.reasoning {
+      border-left-color: #b38be1;
+      background: #211b2b;
+    }
+
+    .event.reasoning .event-header {
+      color: #d1b7ef;
+    }
+
+    .event.reasoning > summary {
+      border-bottom: 0;
+    }
+
+    .event.reasoning[open] > summary {
+      border-bottom: 1px solid var(--line-soft);
     }
 
     .event.user {
@@ -485,8 +544,130 @@
       overflow-x: auto;
       color: var(--code);
       font: 14px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
-      white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .markdown-body {
+      white-space: normal;
+    }
+
+    .markdown-body > :first-child {
+      margin-top: 0;
+    }
+
+    .markdown-body > :last-child {
+      margin-bottom: 0;
+    }
+
+    .markdown-body p,
+    .markdown-body ul,
+    .markdown-body ol,
+    .markdown-body blockquote,
+    .markdown-body pre,
+    .markdown-body table {
+      margin: 0 0 14px;
+    }
+
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4,
+    .markdown-body h5,
+    .markdown-body h6 {
+      margin: 0 0 10px;
+      color: var(--text);
+      font-family: inherit;
+      line-height: 1.3;
+    }
+
+    .markdown-body h1 {
+      font-size: 1.35em;
+    }
+
+    .markdown-body h2 {
+      font-size: 1.25em;
+    }
+
+    .markdown-body h3 {
+      font-size: 1.15em;
+    }
+
+    .markdown-body ul,
+    .markdown-body ol {
+      padding-left: 24px;
+    }
+
+    .markdown-body li + li {
+      margin-top: 4px;
+    }
+
+    .markdown-body blockquote {
+      border-left: 3px solid #8d72c5;
+      padding-left: 12px;
+      color: var(--muted);
+    }
+
+    .markdown-body a {
+      color: var(--purple-strong);
+    }
+
+    .markdown-body code {
+      border-radius: 4px;
+      padding: 2px 5px;
+      background: #30283b;
+      color: #e4d9ff;
+      font: .95em ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .markdown-body pre {
+      overflow-x: auto;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      padding: 12px;
+      background: #151219;
+    }
+
+    .markdown-body pre code {
+      padding: 0;
+      background: transparent;
+      color: var(--code);
+      white-space: pre;
+    }
+
+    .markdown-body hr {
+      margin: 18px 0;
+      border: 0;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .markdown-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: inherit;
+    }
+
+    .markdown-body th,
+    .markdown-body td {
+      border: 1px solid var(--line-soft);
+      padding: 7px 9px;
+      text-align: left;
+    }
+
+    .markdown-body th {
+      color: var(--purple-strong);
+      background: #211b2b;
+    }
+
+    .math-inline {
+      display: inline-block;
+      padding: 0 2px;
+    }
+
+    .math-display {
+      display: block;
+      overflow-x: auto;
+      margin: 16px 0;
+      text-align: center;
     }
 
     .composer {
@@ -579,12 +760,13 @@
       text-overflow: ellipsis;
     }
 
-    .model-control {
+    .model-control,
+    .reasoning-control {
       position: relative;
       min-width: 0;
     }
 
-    .model-picker {
+    .select-picker {
       display: inline-flex;
       align-items: center;
       max-width: 280px;
@@ -597,28 +779,28 @@
       cursor: pointer;
     }
 
-    .model-picker:hover:not(:disabled),
-    .model-picker:focus-visible,
-    .model-picker[aria-expanded="true"] {
+    .select-picker:hover:not(:disabled),
+    .select-picker:focus-visible,
+    .select-picker[aria-expanded="true"] {
       border-color: var(--purple);
       background: #30283b;
       box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.16), 0 0 18px rgba(167, 139, 250, 0.3);
       outline: 0;
     }
 
-    .model-picker:disabled {
+    .select-picker:disabled {
       cursor: not-allowed;
       opacity: 0.7;
     }
 
-    .model-picker .status-value {
+    .select-picker .status-value {
       overflow: hidden;
       text-align: left;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .model-picker-chevron {
+    .select-picker-chevron {
       width: 7px;
       height: 7px;
       flex: 0 0 7px;
@@ -627,7 +809,7 @@
       transform: rotate(45deg) translateY(-2px);
     }
 
-    .model-menu {
+    .select-menu {
       position: absolute;
       left: 0;
       bottom: calc(100% + 10px);
@@ -646,11 +828,11 @@
       box-shadow: 0 16px 34px rgba(0, 0, 0, 0.35), 0 0 20px rgba(167, 139, 250, 0.14);
     }
 
-    .model-menu[hidden] {
+    .select-menu[hidden] {
       display: none;
     }
 
-    .model-option {
+    .select-option {
       display: block;
       width: 100%;
       overflow: hidden;
@@ -665,8 +847,8 @@
       cursor: pointer;
     }
 
-    .model-option:hover,
-    .model-option[aria-selected="true"] {
+    .select-option:hover,
+    .select-option[aria-selected="true"] {
       border-color: #63537d;
       background: #30283b;
       color: var(--text);
@@ -786,7 +968,7 @@
         gap: 8px;
       }
 
-      .model-picker {
+      .select-picker {
         width: 100%;
         max-width: 100%;
       }
@@ -842,11 +1024,11 @@
         grid-area: model;
       }
 
-      .model-picker {
+      .select-picker {
         width: auto;
       }
 
-      .reasoning-status {
+      .reasoning-control {
         grid-area: reasoning;
       }
 
@@ -935,7 +1117,7 @@
                 <div class="status-item model-control">
                   <span class="status-label">Model</span>
                   <button
-                    class="model-picker"
+                    class="select-picker"
                     id="modelPicker"
                     type="button"
                     aria-label="Select model"
@@ -943,13 +1125,24 @@
                     disabled
                   >
                     <span class="status-value" id="modelValue">Loading</span>
-                    <span class="model-picker-chevron" aria-hidden="true"></span>
+                    <span class="select-picker-chevron" aria-hidden="true"></span>
                   </button>
-                  <div class="model-menu" id="modelMenu" role="listbox" aria-label="Available models" hidden></div>
+                  <div class="select-menu" id="modelMenu" role="listbox" aria-label="Available models" hidden></div>
                 </div>
-                <div class="status-item reasoning-status">
+                <div class="status-item reasoning-control">
                   <span class="status-label">Reasoning</span>
-                  <span class="status-value" id="reasoningValue">Loading</span>
+                  <button
+                    class="select-picker"
+                    id="reasoningPicker"
+                    type="button"
+                    aria-label="Select reasoning effort"
+                    aria-expanded="false"
+                    disabled
+                  >
+                    <span class="status-value" id="reasoningValue">Provider default</span>
+                    <span class="select-picker-chevron" aria-hidden="true"></span>
+                  </button>
+                  <div class="select-menu" id="reasoningMenu" role="listbox" aria-label="Available reasoning efforts" hidden></div>
                 </div>
                 <div class="status-item context-status">
                   <span class="status-label">Context</span>
@@ -979,6 +1172,8 @@
     const modelPicker = document.querySelector("#modelPicker");
     const modelMenu = document.querySelector("#modelMenu");
     const reasoningValue = document.querySelector("#reasoningValue");
+    const reasoningPicker = document.querySelector("#reasoningPicker");
+    const reasoningMenu = document.querySelector("#reasoningMenu");
     const runButton = document.querySelector("#runButton");
     const runState = document.querySelector("#runState");
     const newSessionButton = document.querySelector("#newSession");
@@ -991,6 +1186,9 @@
     let canRun = false;
     let selectedModel = "";
     let availableModels = [];
+    let selectedReasoning = "";
+    let availableReasoningEfforts = [];
+    let modelReasoningEfforts = {};
     let modelContextLimits = {};
     let contextLimitOverride = null;
     let contextLimit = null;
@@ -998,9 +1196,13 @@
     let activeSessionId = "";
     let sessions = [];
     let isRunning = false;
+    let activeProcess = null;
     let activeToolGroup = null;
     let pendingToolSteps = [];
     let pendingToolEvent = null;
+    let markdownLoader = null;
+    let mathRendererLoader = null;
+    const markdownBodies = new Set();
 
     function setState(state, label) {
       runState.dataset.state = state;
@@ -1065,6 +1267,8 @@
 
     function resetTimeline() {
       timeline.replaceChildren();
+      markdownBodies.clear();
+      activeProcess = null;
       activeToolGroup = null;
       pendingToolSteps = [];
       pendingToolEvent = null;
@@ -1072,6 +1276,176 @@
       contextReported = false;
       updateContextLimit();
       activity.scrollTop = 0;
+    }
+
+    function loadMarkdownRenderer() {
+      if (window.marked && typeof window.marked.parse === "function") {
+        return Promise.resolve(true);
+      }
+      if (!markdownLoader) {
+        markdownLoader = new Promise((resolve) => {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js";
+          script.onload = () => resolve(Boolean(window.marked && window.marked.parse));
+          script.onerror = () => resolve(false);
+          document.head.append(script);
+        }).then((loaded) => {
+          if (loaded) {
+            markdownBodies.forEach((body) => {
+              if (body.isConnected) {
+                renderParsedMarkdown(body);
+              } else {
+                markdownBodies.delete(body);
+              }
+            });
+          }
+          return loaded;
+        });
+      }
+      return markdownLoader;
+    }
+
+    function loadMathRenderer() {
+      if (window.katex) {
+        return Promise.resolve(window.katex);
+      }
+      if (!mathRendererLoader) {
+        mathRendererLoader = new Promise((resolve) => {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css";
+          document.head.append(link);
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js";
+          script.onload = () => resolve(window.katex || null);
+          script.onerror = () => resolve(null);
+          document.head.append(script);
+        });
+      }
+      return mathRendererLoader;
+    }
+
+    function sanitizeMarkdown(fragment) {
+      const allowedTags = new Set([
+        "A", "BLOCKQUOTE", "BR", "CODE", "DEL", "EM", "H1", "H2", "H3", "H4", "H5", "H6",
+        "HR", "LI", "OL", "P", "PRE", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
+      ]);
+      fragment.querySelectorAll("*").forEach((node) => {
+        if (!allowedTags.has(node.tagName)) {
+          node.replaceWith(document.createTextNode(node.textContent || ""));
+          return;
+        }
+        Array.from(node.attributes).forEach((attribute) => {
+          const safeLink = node.tagName === "A"
+            && attribute.name === "href"
+            && /^(https?:|mailto:)/i.test(attribute.value);
+          const safeCodeClass = node.tagName === "CODE"
+            && attribute.name === "class"
+            && /^language-[\w-]+$/.test(attribute.value);
+          if (safeLink) {
+            node.setAttribute("target", "_blank");
+            node.setAttribute("rel", "noreferrer");
+          } else if (!safeCodeClass) {
+            node.removeAttribute(attribute.name);
+          }
+        });
+      });
+    }
+
+    function replaceMathTokens(fragment, mathTokens) {
+      const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+      const textNodes = [];
+      while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+      }
+      textNodes.forEach((node) => {
+        if (node.parentElement && node.parentElement.closest("code, pre")) {
+          node.nodeValue = (node.nodeValue || "").replace(/YCODEMATH(\d+)END/g, (match, index) => {
+            return mathTokens[Number(index)]?.source || match;
+          });
+          return;
+        }
+        const markerPattern = /YCODEMATH(\d+)END/g;
+        const text = node.nodeValue || "";
+        const replacement = document.createDocumentFragment();
+        let cursor = 0;
+        let changed = false;
+        let match;
+        while ((match = markerPattern.exec(text)) !== null) {
+          changed = true;
+          replacement.append(document.createTextNode(text.slice(cursor, match.index)));
+          const token = mathTokens[Number(match[1])];
+          if (!token) {
+            replacement.append(document.createTextNode(match[0]));
+            cursor = match.index + match[0].length;
+            continue;
+          }
+          const math = document.createElement("span");
+          math.className = token.display ? "math-display" : "math-inline";
+          math.dataset.math = token.value;
+          math.dataset.displayMath = String(token.display);
+          math.textContent = token.value;
+          replacement.append(math);
+          cursor = match.index + match[0].length;
+        }
+        if (changed) {
+          replacement.append(document.createTextNode(text.slice(cursor)));
+          node.replaceWith(replacement);
+        }
+      });
+    }
+
+    function typesetMath(body) {
+      const mathNodes = body.querySelectorAll("[data-math]");
+      if (!mathNodes.length) {
+        return;
+      }
+      loadMathRenderer().then((katex) => {
+        if (!katex || !body.isConnected) {
+          return;
+        }
+        mathNodes.forEach((node) => {
+          katex.render(node.dataset.math || "", node, {
+            displayMode: node.dataset.displayMath === "true",
+            throwOnError: false,
+          });
+        });
+      });
+    }
+
+    function renderParsedMarkdown(body) {
+      if (!window.marked || typeof window.marked.parse !== "function") {
+        return;
+      }
+      const mathTokens = [];
+      const markdown = (body.dataset.markdown || "").replace(
+        /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$\n]+?)\$/g,
+        (match, displayDollar, displayBracket, inline) => {
+          const value = displayDollar ?? displayBracket ?? inline;
+          const display = displayDollar !== undefined || displayBracket !== undefined;
+          const index = mathTokens.push({ value, display }) - 1;
+          mathTokens[index].source = match;
+          return `YCODEMATH${index}END`;
+        },
+      );
+      const template = document.createElement("template");
+      template.innerHTML = window.marked.parse(markdown, { breaks: true, gfm: true });
+      sanitizeMarkdown(template.content);
+      replaceMathTokens(template.content, mathTokens);
+      body.replaceChildren(template.content);
+      typesetMath(body);
+    }
+
+    function renderMarkdown(body, content) {
+      const source = typeof content === "string" ? content : String(content ?? "");
+      body.dataset.markdown = source;
+      markdownBodies.add(body);
+      if (window.marked && typeof window.marked.parse === "function") {
+        renderParsedMarkdown(body);
+      } else {
+        body.textContent = source;
+        loadMarkdownRenderer();
+      }
     }
 
     function applySession(session) {
@@ -1151,6 +1525,11 @@
       modelPicker.setAttribute("aria-expanded", "false");
     }
 
+    function closeReasoningMenu() {
+      reasoningMenu.hidden = true;
+      reasoningPicker.setAttribute("aria-expanded", "false");
+    }
+
     function formatContextLimit(tokens) {
       if (tokens >= 1_000_000) {
         return `${(tokens / 1_000_000).toFixed(1).replace(".0", "")}M`;
@@ -1187,7 +1566,7 @@
       modelMenu.replaceChildren();
       availableModels.forEach((model) => {
         const option = document.createElement("button");
-        option.className = "model-option";
+        option.className = "select-option";
         option.type = "button";
         option.role = "option";
         option.textContent = model;
@@ -1197,12 +1576,49 @@
           selectedModel = model;
           modelValue.textContent = model;
           modelValue.title = model;
+          updateReasoningOptions();
           updateContextLimit();
           closeModelMenu();
           renderModelMenu();
         });
         modelMenu.append(option);
       });
+    }
+
+    function reasoningLabel(effort) {
+      return effort ? effort.charAt(0).toUpperCase() + effort.slice(1) : "Provider default";
+    }
+
+    function renderReasoningMenu() {
+      reasoningMenu.replaceChildren();
+      ["", ...availableReasoningEfforts].forEach((effort) => {
+        const option = document.createElement("button");
+        option.className = "select-option";
+        option.type = "button";
+        option.role = "option";
+        option.textContent = reasoningLabel(effort);
+        option.setAttribute("aria-selected", effort === selectedReasoning ? "true" : "false");
+        option.addEventListener("click", () => {
+          selectedReasoning = effort;
+          updateReasoningOptions();
+        });
+        reasoningMenu.append(option);
+      });
+    }
+
+    function updateReasoningOptions() {
+      const efforts = modelReasoningEfforts[selectedModel];
+      availableReasoningEfforts = Array.isArray(efforts) ? efforts : [];
+      if (!availableReasoningEfforts.includes(selectedReasoning)) {
+        selectedReasoning = "";
+      }
+      reasoningValue.textContent = reasoningLabel(selectedReasoning);
+      reasoningPicker.disabled = availableReasoningEfforts.length === 0;
+      reasoningPicker.title = availableReasoningEfforts.length
+        ? "Select reasoning effort"
+        : "No configured reasoning efforts";
+      closeReasoningMenu();
+      renderReasoningMenu();
     }
 
     function appendStep(step) {
@@ -1224,14 +1640,50 @@
       return header;
     }
 
-    function appendEvent(kind, title, content) {
-      const item = document.createElement("article");
+    function createEvent(kind, title, content) {
+      const item = document.createElement(kind === "reasoning" ? "details" : "article");
       item.className = `event ${kind}`;
-      const body = document.createElement("pre");
-      body.className = "event-body";
-      body.textContent = content;
-      item.append(createEventHeader("div", title), body);
+      const body = document.createElement("div");
+      body.className = "event-body markdown-body";
+      renderMarkdown(body, content);
+      item.append(createEventHeader(kind === "reasoning" ? "summary" : "div", title), body);
+      return item;
+    }
+
+    function appendEvent(kind, title, content) {
+      const item = createEvent(kind, title, content);
       timeline.append(item);
+      return item;
+    }
+
+    function createProcess() {
+      const item = document.createElement("details");
+      item.className = "work-group";
+      const body = document.createElement("div");
+      body.className = "work-group-body";
+      item.append(createEventHeader("summary", "Agent process"), body);
+      timeline.append(item);
+      return { item, body };
+    }
+
+    function ensureProcess() {
+      if (!activeProcess) {
+        activeProcess = createProcess();
+      }
+      return activeProcess;
+    }
+
+    function appendProcessEvent(process, kind, title, content) {
+      const item = createEvent(kind, title, content);
+      process.body.append(item);
+      return item;
+    }
+
+    function flushPendingSteps(process) {
+      if (pendingToolSteps.length) {
+        process.body.append(...pendingToolSteps);
+        pendingToolSteps = [];
+      }
     }
 
     function createToolPart(title, content) {
@@ -1244,13 +1696,13 @@
       return part;
     }
 
-    function appendToolGroup() {
+    function appendToolGroup(process) {
       const item = document.createElement("details");
       item.className = "event tool-group";
       const header = createEventHeader("summary", "Tools", "· 0");
       const tools = document.createElement("div");
       item.append(header, tools);
-      timeline.append(item);
+      process.body.append(item);
       return {
         item,
         tools,
@@ -1268,7 +1720,6 @@
       group.tools.append(item);
       group.size += 1;
       group.count.textContent = `· ${group.size}`;
-      timeline.append(group.item);
       return parts;
     }
 
@@ -1278,24 +1729,40 @@
 
     function renderSessionHistory(messages) {
       const toolEvents = new Map();
+      let process = null;
       let toolGroup = null;
       messages.forEach((message) => {
         if (!message || typeof message !== "object") {
           return;
         }
         if (message.role === "user") {
+          process = null;
           toolGroup = null;
+          toolEvents.clear();
           appendEvent("user", "User task", typeof message.content === "string" ? message.content : "");
           return;
         }
         if (message.role === "assistant") {
-          if (typeof message.content === "string" && message.content) {
-            appendEvent("model", "Model reply", message.content);
+          const reasoning = message.reasoning_content;
+          if (typeof reasoning === "string" && reasoning) {
+            process = process || createProcess();
+            toolGroup = null;
+            appendProcessEvent(process, "reasoning", "Thinking", reasoning);
           }
-          if (!Array.isArray(message.tool_calls)) {
+          const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+          if (!toolCalls.length) {
+            toolGroup = null;
+            if (typeof message.content === "string" && message.content) {
+              appendEvent("final", "Final answer", message.content);
+            }
             return;
           }
-          message.tool_calls.forEach((call) => {
+          process = process || createProcess();
+          if (typeof message.content === "string" && message.content) {
+            toolGroup = null;
+            appendProcessEvent(process, "model", "Model reply", message.content);
+          }
+          toolCalls.forEach((call) => {
             const functionData = call && typeof call === "object" ? call.function : null;
             if (!functionData || typeof functionData !== "object") {
               return;
@@ -1307,7 +1774,7 @@
               argumentsText = String(argumentsText);
             }
             if (!toolGroup) {
-              toolGroup = appendToolGroup();
+              toolGroup = appendToolGroup(process);
             }
             const parts = appendToolEvent(toolGroup, functionData.name || "", argumentsText);
             if (typeof call.id === "string") {
@@ -1335,14 +1802,22 @@
         contextReported = true;
         contextLimit = Number.isInteger(event.limit) && event.limit > 0 ? event.limit : null;
         contextValue.textContent = formatContextUsage(event.tokens);
+      } else if (event.type === "reasoning") {
+        activeToolGroup = null;
+        const process = ensureProcess();
+        flushPendingSteps(process);
+        appendProcessEvent(process, "reasoning", "Thinking", event.content);
       } else if (event.type === "model") {
-        appendEvent("model", "Model reply", event.content);
+        activeToolGroup = null;
+        const process = ensureProcess();
+        flushPendingSteps(process);
+        appendProcessEvent(process, "model", "Model reply", event.content);
       } else if (event.type === "tool_call") {
+        const process = ensureProcess();
+        flushPendingSteps(process);
         if (!activeToolGroup) {
-          activeToolGroup = appendToolGroup();
+          activeToolGroup = appendToolGroup(process);
         }
-        activeToolGroup.tools.append(...pendingToolSteps);
-        pendingToolSteps = [];
         pendingToolEvent = appendToolEvent(
           activeToolGroup,
           event.name,
@@ -1354,12 +1829,15 @@
           pendingToolEvent = null;
         }
       } else if (event.type === "final") {
+        activeToolGroup = null;
         pendingToolSteps = [];
         appendEvent("final", "Final answer", event.content || "(empty response)");
       } else if (event.type === "error") {
+        activeToolGroup = null;
         pendingToolSteps = [];
         appendEvent("error", `${event.source} error`, event.message);
       } else if (event.type === "stopped") {
+        activeToolGroup = null;
         pendingToolSteps = [];
         appendEvent("error", "Stopped", `Maximum step count reached: ${event.max_steps}`);
       }
@@ -1375,12 +1853,16 @@
         const config = await response.json();
         availableModels = Array.isArray(config.models) ? config.models : [];
         selectedModel = config.model !== "Not configured" ? config.model : "";
+        selectedReasoning = typeof config.reasoning_effort === "string" ? config.reasoning_effort : "";
+        modelReasoningEfforts = config.reasoning_efforts && typeof config.reasoning_efforts === "object"
+          ? config.reasoning_efforts
+          : {};
         modelValue.textContent = selectedModel || "Not configured";
         modelValue.title = selectedModel;
         modelPicker.disabled = availableModels.length === 0 || Boolean(config.model_error);
         modelPicker.title = config.model_error || "Select model";
         renderModelMenu();
-        reasoningValue.textContent = config.reasoning;
+        updateReasoningOptions();
         workspaceValue.textContent = config.workspace;
         workspaceValue.title = config.workspace;
         const parsedLimit = Number(config.context_limit);
@@ -1441,7 +1923,12 @@
         const response = await fetch("/api/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ task, model: selectedModel, session_id: activeSessionId }),
+          body: JSON.stringify({
+            task,
+            model: selectedModel,
+            reasoning_effort: selectedReasoning || null,
+            session_id: activeSessionId,
+          }),
         });
         if (!response.ok) {
           const data = await response.json();
@@ -1512,9 +1999,21 @@
         modelPicker.setAttribute("aria-expanded", "true");
       }
     });
+    reasoningPicker.addEventListener("click", () => {
+      const expanded = reasoningPicker.getAttribute("aria-expanded") === "true";
+      if (expanded) {
+        closeReasoningMenu();
+      } else if (availableReasoningEfforts.length) {
+        reasoningMenu.hidden = false;
+        reasoningPicker.setAttribute("aria-expanded", "true");
+      }
+    });
     document.addEventListener("click", (event) => {
       if (!modelPicker.contains(event.target) && !modelMenu.contains(event.target)) {
         closeModelMenu();
+      }
+      if (!reasoningPicker.contains(event.target) && !reasoningMenu.contains(event.target)) {
+        closeReasoningMenu();
       }
     });
     taskInput.addEventListener("keydown", (event) => {

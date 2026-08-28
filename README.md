@@ -9,6 +9,8 @@ Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容
 - `web_search`：调用 DeepSeek 服务端原生网页搜索。
 - Agent 循环：解析模型回复、执行工具、保存结果并继续请求模型。
 - 模型选择：从兼容接口的 `/models` 列表读取可用模型。
+- 推理等级：已知 DeepSeek V4 模型可选择 `Off`、`Low`、`High`、`Max`，默认由提供商决定。
+- 思考过程：显示模型返回的 `reasoning_content`，支持 Markdown 渲染，并与工具调用按实际顺序归入可折叠的工作过程。
 - 上下文显示：根据模型上限和 `prompt_tokens` 显示当前占用情况。
 - Web 工作台：实时显示运行过程，并支持历史会话切换。
 - 会话持久化：每个会话保存在 `sessions/` 下的独立 JSON 文件中。
@@ -53,6 +55,8 @@ python src/web.py
 | `DEEPSEEK_SEARCH_MODEL` | 网页搜索模型，默认是 `deepseek-v4-flash` |
 
 `AGENT_API_KEY`、`OPENAI_API_KEY` 和 `DEEPSEEK_API_KEY` 都可以作为 API key 来源。凭据只在服务端环境变量中读取，不会发送到浏览器。
+
+终端可通过 `--reasoning-effort` 选择 `off`、`low`、`high` 或 `max`；不传该参数时不发送推理等级。
 
 ## 项目结构
 

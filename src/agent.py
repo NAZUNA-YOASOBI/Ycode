@@ -119,6 +119,18 @@ MODEL_CONTEXT_LIMITS = {
     "deepseek-v4-flash": 1_048_576,
     "deepseek-v4-pro": 1_048_576,
 }
+# 推理等级来自本地模型能力表，不从远端模型列表推断。
+DEEPSEEK_REASONING_EFFORTS = {
+    "off": None,
+    "low": "low",
+    "high": "high",
+    "max": "max",
+}
+MODEL_REASONING_EFFORTS = {
+    "deepseek-v4-flash": DEEPSEEK_REASONING_EFFORTS,
+    "deepseek-v4-pro": DEEPSEEK_REASONING_EFFORTS,
+    "deepseek-v4-flash-vision-exp": DEEPSEEK_REASONING_EFFORTS,
+}
 SESSION_DIR_NAME = "sessions"
 DEFAULT_SESSION_ID = "default"
 
@@ -130,6 +142,7 @@ class Config:
     base_url: str
     model: str
     context_limit: int | None = None
+    reasoning_effort: str | None = None
     max_steps: int = 8
     model_retries: int = 1
     model_timeout: float = 60.0
@@ -468,6 +481,12 @@ def request_model(messages: list[dict[str, Any]], config: Config) -> tuple[dict[
         "tools": TOOLS + [WEB_SEARCH_TOOL],
         "tool_choice": "auto",
     }
+    # 默认模式不发送推理字段，其余等级按 DeepSeek 协议转换。
+    if config.reasoning_effort == "off":
+        payload["thinking"] = {"type": "disabled"}
+    elif config.reasoning_effort is not None:
+        payload["thinking"] = {"type": "enabled"}
+        payload["reasoning_effort"] = MODEL_REASONING_EFFORTS[config.model][config.reasoning_effort]
     request = urllib.request.Request(
         f"{config.base_url.rstrip('/')}/chat/completions",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -602,9 +621,14 @@ def run_agent(
 
         # 先保存模型消息，保证下一次请求能看到完整上下文。
         assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str):
+            assistant_message["reasoning_content"] = reasoning_content
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
         messages.append(assistant_message)
+        if isinstance(reasoning_content, str) and reasoning_content:
+            emit({"type": "reasoning", "content": reasoning_content})
 
         # 没有工具调用表示模型已经给出最终回答。
         if not tool_calls:
@@ -644,6 +668,7 @@ def run_agent(
 def build_config(
     base_url: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     search_model: str | None = None,
     context_limit: int | None = None,
     max_steps: int = 8,
@@ -663,6 +688,8 @@ def build_config(
             resolved_model = fetch_models(resolved_base_url, api_key, model_timeout)[0]
         except RuntimeError as exc:
             raise ValueError(f"unable to choose a model: {exc}") from exc
+    if reasoning_effort is not None and reasoning_effort not in MODEL_REASONING_EFFORTS.get(resolved_model, {}):
+        raise ValueError(f'model "{resolved_model}" does not support reasoning effort "{reasoning_effort}"')
     if context_limit is None and os.getenv("AGENT_CONTEXT_LIMIT"):
         try:
             context_limit = int(os.environ["AGENT_CONTEXT_LIMIT"])
@@ -679,6 +706,7 @@ def build_config(
         base_url=resolved_base_url,
         model=resolved_model,
         context_limit=context_limit,
+        reasoning_effort=reasoning_effort,
         search_model=search_model or os.getenv("DEEPSEEK_SEARCH_MODEL", "deepseek-v4-flash"),
         max_steps=max_steps,
         model_retries=model_retries,
@@ -695,6 +723,7 @@ def parse_args() -> tuple[str, Path, Config]:
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Workspace directory.")
     parser.add_argument("--base-url")
     parser.add_argument("--model")
+    parser.add_argument("--reasoning-effort", choices=DEEPSEEK_REASONING_EFFORTS)
     parser.add_argument("--search-model")
     parser.add_argument("--context-limit", type=int)
     parser.add_argument("--max-steps", type=int, default=8)
@@ -715,6 +744,7 @@ def parse_args() -> tuple[str, Path, Config]:
         config = build_config(
             base_url=args.base_url,
             model=args.model,
+            reasoning_effort=args.reasoning_effort,
             search_model=args.search_model,
             context_limit=args.context_limit,
             max_steps=args.max_steps,

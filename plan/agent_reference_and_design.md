@@ -40,6 +40,8 @@ DeepSeek Harness 的 README 明确提示开发者预览阶段可能发生破坏�
 
 DSH 能显示上下文窗口，并不是因为标准 `GET /models` 接口返回了该字段。它先从安装的模型目录读取模型元数据，再允许提供商配置通过 `contextWindow` 覆盖；仍未知时使用路由级 `defaultContextWindow`。可选推理等级同样来自目录或配置中的 `reasoningEfforts`，不是对任意兼容网关动态探测得出。
 
+DSH 的 `acme-think` 示例中 `max: ultra` 只是展示私有网关如何转换自定义参数，并不是 DeepSeek 模型的配置。DeepSeek 官方适配器实际提供 `off`、`low`、`high`、`max`：`off` 发送 `thinking.type=disabled`，其余等级发送 `thinking.type=enabled` 和同名 `reasoning_effort`；不选择等级时省略两个字段，保留提供商默认行为。模型能力由本地配置声明，远端接口仍负责最终验证。
+
 ## 文件、Shell 与 Web 能力的取舍
 
 从能力类别看，DSH 可以概括为五组常见插件：文件系统、Shell 命令、Web、子 Agent 和 Skills。它们不是五个固定的单一工具；每组可以提供多个模型可见工具。例如文件组包含 `read`、`write`、`edit`、`read_image`，Shell 组包含 `bash` 或 `pwsh`，Web 组包含 `web_search` 和 `web_fetch`。
@@ -177,6 +179,8 @@ Turn 结束
 - 核心循环输出结构化运行事件，网页实时显示 step、模型回复、工具调用、工具结果、最终回答和错误状态。
 - 增加 Ycode Web 界面、紫色主题、响应式布局和空输入时禁用的发送按钮。
 - 主模型通过兼容接口的 `GET /models` 获取；页面支持鼠标选择模型，`AGENT_MODEL` 可指定默认模型，未指定时使用远端列表中的第一个模型。
+- 已知 DeepSeek V4 模型按本地能力表提供 `Off`、`Low`、`High`、`Max` 推理等级选择；未知模型只使用 `Provider default`。推理模式下返回的 `reasoning_content` 随模型消息保存，保证工具调用后的下一步请求能够完整回放。
+- 推理模式下，模型返回的 `reasoning_content` 会作为工作过程事件显示。每个用户任务有一个大的 `Agent process` 折叠区，内部按事件实际顺序显示可单独折叠且支持 Markdown 的 Thinking 和连续工具批次；模型回复和最终回答也使用 Markdown 渲染，工具批次仍保留 `Tools → Tool → Call/Result` 多级折叠，最终回答位于工作过程区外。
 - 根据本地模型配置的上下文上限和接口返回的 `usage.prompt_tokens` 显示上下文占用百分比；最近一次用量随会话保存，未知数据不自行猜测。
 - 会话历史保存到工作目录 `sessions/` 下的独立 JSON 文件，记录消息、标题、时间和最近一次 token 用量。
 - 左侧历史栏支持新建、切换和恢复会话；刷新或重新启动 Web 服务后仍可继续历史对话。

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from agent import (
     MODEL_CONTEXT_LIMITS,
+    MODEL_REASONING_EFFORTS,
     SESSION_DIR_NAME,
     api_key_from_env,
     build_config,
@@ -159,7 +160,12 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 "session": session_public(current_session) if current_session else None,
                 "sessions": sessions,
                 "session_error": session_error,
-                "reasoning": "Provider default",
+                "reasoning_effort": None,
+                "reasoning_efforts": {
+                    model: list(MODEL_REASONING_EFFORTS[model])
+                    for model in models
+                    if model in MODEL_REASONING_EFFORTS
+                },
                 "context_limit": os.getenv("AGENT_CONTEXT_LIMIT"),
                 "context_limits": {
                     model: MODEL_CONTEXT_LIMITS[model]
@@ -231,7 +237,11 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                     if not isinstance(selected_model, str) or not selected_model.strip():
                         raise ValueError("model must be a non-empty string")
                     selected_model = selected_model.strip()
-                config = build_config(model=selected_model)
+                reasoning_effort = data.get("reasoning_effort")
+                if reasoning_effort is not None:
+                    if not isinstance(reasoning_effort, str) or not reasoning_effort:
+                        raise ValueError("reasoning_effort must be a non-empty string or null")
+                config = build_config(model=selected_model, reasoning_effort=reasoning_effort)
             except (UnicodeError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
                 self.send_json(400, {"error": str(exc)})
                 return
