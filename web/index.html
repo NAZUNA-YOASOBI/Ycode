@@ -93,7 +93,7 @@
 
     .brand-name {
       margin: 0;
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 750;
       letter-spacing: 0;
     }
@@ -101,7 +101,7 @@
     .brand-subtitle {
       margin: 2px 0 0;
       color: var(--muted);
-      font: 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+      font: 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
     .run-state {
@@ -171,7 +171,7 @@
     .sidebar-title {
       margin: 0;
       color: var(--muted);
-      font: 700 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+      font: 700 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
       letter-spacing: .04em;
       text-transform: uppercase;
     }
@@ -186,7 +186,7 @@
       padding: 7px 10px;
       background: var(--surface-strong);
       color: var(--code);
-      font-size: 12px;
+      font-size: 14px;
       cursor: pointer;
     }
 
@@ -256,7 +256,7 @@
     .session-item-title {
       min-width: 0;
       overflow: hidden;
-      font-size: 13px;
+      font-size: 15px;
       line-height: 1.35;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -264,7 +264,7 @@
 
     .session-item-time {
       color: #81798a;
-      font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+      font: 13px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
 
     .main {
@@ -344,12 +344,45 @@
       background: var(--line-soft);
     }
 
+    .tool-group .step-divider {
+      margin: 0;
+      padding: 6px 13px;
+    }
+
     .event {
       border: 1px solid var(--line);
       border-left: 3px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       overflow: hidden;
+    }
+
+    .event > summary,
+    .tool-event > summary,
+    .tool-part > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+
+    .event > summary::-webkit-details-marker,
+    .tool-event > summary::-webkit-details-marker,
+    .tool-part > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .event > summary::after,
+    .tool-event > summary::after,
+    .tool-part > summary::after {
+      content: "+";
+      margin-left: auto;
+      color: var(--muted);
+      font: 16px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .event[open] > summary::after,
+    .tool-event[open] > summary::after,
+    .tool-part[open] > summary::after {
+      content: "-";
     }
 
     .event.model {
@@ -360,12 +393,59 @@
       border-left-color: #8f9489;
     }
 
-    .event.tool-call {
+    .event.tool-group {
       border-left-color: var(--amber);
     }
 
-    .event.tool-result {
-      border-left-color: #8f9489;
+    .event.tool-group > summary {
+      color: var(--amber);
+    }
+
+    .tool-event {
+      margin-left: 8px;
+      border-left: 3px solid var(--purple);
+    }
+
+    .tool-event > summary {
+      color: var(--purple-strong);
+    }
+
+    .tool-part {
+      margin-left: 8px;
+      border-left: 3px solid transparent;
+    }
+
+    .tool-part:nth-child(1) {
+      border-left-color: #77a6bf;
+    }
+
+    .tool-part:nth-child(1) > summary {
+      color: #9bc3d8;
+    }
+
+    .tool-part:nth-child(2) {
+      border-left-color: #c58aa6;
+    }
+
+    .tool-part:nth-child(2) > summary {
+      color: #d6a1b8;
+    }
+
+    .event.tool-group > summary,
+    .tool-event > summary,
+    .tool-part > summary {
+      border-bottom: 0;
+    }
+
+    .event.tool-group[open] > summary,
+    .tool-event[open] > summary,
+    .tool-part[open] > summary {
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .tool-event + .tool-event,
+    .tool-part + .tool-part {
+      border-top: 1px solid var(--line-soft);
     }
 
     .event.final {
@@ -404,7 +484,7 @@
       padding: 14px;
       overflow-x: auto;
       color: var(--code);
-      font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+      font: 14px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
@@ -470,7 +550,7 @@
     .composer-workspace {
       max-width: 100%;
       gap: 7px;
-      font-size: 13px;
+      font-size: 14px;
       white-space: nowrap;
     }
 
@@ -483,7 +563,7 @@
 
     .status-item {
       gap: 6px;
-      font-size: 13px;
+      font-size: 14px;
       white-space: nowrap;
     }
 
@@ -918,6 +998,9 @@
     let activeSessionId = "";
     let sessions = [];
     let isRunning = false;
+    let activeToolGroup = null;
+    let pendingToolSteps = [];
+    let pendingToolEvent = null;
 
     function setState(state, label) {
       runState.dataset.state = state;
@@ -982,6 +1065,9 @@
 
     function resetTimeline() {
       timeline.replaceChildren();
+      activeToolGroup = null;
+      pendingToolSteps = [];
+      pendingToolEvent = null;
       emptyState.hidden = false;
       contextReported = false;
       updateContextLimit();
@@ -1123,14 +1209,11 @@
       const divider = document.createElement("div");
       divider.className = "step-divider";
       divider.textContent = `Step ${step}`;
-      timeline.append(divider);
+      pendingToolSteps.push(divider);
     }
 
-    function appendEvent(kind, title, content, name = "") {
-      const item = document.createElement("article");
-      item.className = `event ${kind}`;
-
-      const header = document.createElement("div");
+    function createEventHeader(tag, title, name = "") {
+      const header = document.createElement(tag);
       header.className = "event-header";
       const label = document.createElement("span");
       label.textContent = title;
@@ -1138,20 +1221,70 @@
       detail.className = "event-name";
       detail.textContent = name;
       header.append(label, detail);
+      return header;
+    }
 
+    function appendEvent(kind, title, content) {
+      const item = document.createElement("article");
+      item.className = `event ${kind}`;
       const body = document.createElement("pre");
       body.className = "event-body";
       body.textContent = content;
-      item.append(header, body);
+      item.append(createEventHeader("div", title), body);
       timeline.append(item);
     }
 
+    function createToolPart(title, content) {
+      const part = document.createElement("details");
+      part.className = "tool-part";
+      const body = document.createElement("pre");
+      body.className = "event-body";
+      body.textContent = content;
+      part.append(createEventHeader("summary", title), body);
+      return part;
+    }
+
+    function appendToolGroup() {
+      const item = document.createElement("details");
+      item.className = "event tool-group";
+      const header = createEventHeader("summary", "Tools", "· 0");
+      const tools = document.createElement("div");
+      item.append(header, tools);
+      timeline.append(item);
+      return {
+        item,
+        tools,
+        count: header.querySelector(".event-name"),
+        size: 0,
+      };
+    }
+
+    function appendToolEvent(group, name, argumentsText) {
+      const item = document.createElement("details");
+      item.className = "tool-event";
+      const parts = document.createElement("div");
+      parts.append(createToolPart("Call", argumentsText));
+      item.append(createEventHeader("summary", "Tool", name), parts);
+      group.tools.append(item);
+      group.size += 1;
+      group.count.textContent = `· ${group.size}`;
+      timeline.append(group.item);
+      return parts;
+    }
+
+    function appendToolResult(parts, content) {
+      parts.append(createToolPart("Result", content));
+    }
+
     function renderSessionHistory(messages) {
+      const toolEvents = new Map();
+      let toolGroup = null;
       messages.forEach((message) => {
         if (!message || typeof message !== "object") {
           return;
         }
         if (message.role === "user") {
+          toolGroup = null;
           appendEvent("user", "User task", typeof message.content === "string" ? message.content : "");
           return;
         }
@@ -1173,12 +1306,21 @@
             } catch (error) {
               argumentsText = String(argumentsText);
             }
-            appendEvent("tool-call", "Tool call", argumentsText, functionData.name || "");
+            if (!toolGroup) {
+              toolGroup = appendToolGroup();
+            }
+            const parts = appendToolEvent(toolGroup, functionData.name || "", argumentsText);
+            if (typeof call.id === "string") {
+              toolEvents.set(call.id, parts);
+            }
           });
           return;
         }
         if (message.role === "tool") {
-          appendEvent("tool-result", "Tool result", typeof message.content === "string" ? message.content : "", message.tool_call_id || "");
+          const parts = toolEvents.get(message.tool_call_id);
+          if (parts) {
+            appendToolResult(parts, typeof message.content === "string" ? message.content : "");
+          }
         }
       });
       if (messages.length) {
@@ -1196,14 +1338,29 @@
       } else if (event.type === "model") {
         appendEvent("model", "Model reply", event.content);
       } else if (event.type === "tool_call") {
-        appendEvent("tool-call", "Tool call", JSON.stringify(event.arguments, null, 2), event.name);
+        if (!activeToolGroup) {
+          activeToolGroup = appendToolGroup();
+        }
+        activeToolGroup.tools.append(...pendingToolSteps);
+        pendingToolSteps = [];
+        pendingToolEvent = appendToolEvent(
+          activeToolGroup,
+          event.name,
+          JSON.stringify(event.arguments, null, 2),
+        );
       } else if (event.type === "tool_result") {
-        appendEvent("tool-result", "Tool result", event.content, event.name);
+        if (pendingToolEvent) {
+          appendToolResult(pendingToolEvent, event.content);
+          pendingToolEvent = null;
+        }
       } else if (event.type === "final") {
+        pendingToolSteps = [];
         appendEvent("final", "Final answer", event.content || "(empty response)");
       } else if (event.type === "error") {
+        pendingToolSteps = [];
         appendEvent("error", `${event.source} error`, event.message);
       } else if (event.type === "stopped") {
+        pendingToolSteps = [];
         appendEvent("error", "Stopped", `Maximum step count reached: ${event.max_steps}`);
       }
       activity.scrollTop = activity.scrollHeight;
@@ -1264,6 +1421,9 @@
 
     async function runTask(task) {
       isRunning = true;
+      activeToolGroup = null;
+      pendingToolSteps = [];
+      pendingToolEvent = null;
       setState("running", "Running");
       updateRunButton();
       taskInput.disabled = true;
@@ -1358,7 +1518,7 @@
       }
     });
     taskInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         taskForm.requestSubmit();
       }

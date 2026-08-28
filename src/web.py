@@ -157,7 +157,6 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 "models": models,
                 "model_error": model_error,
                 "session": session_public(current_session) if current_session else None,
-                "session_id": current_session["id"] if current_session else None,
                 "sessions": sessions,
                 "session_error": session_error,
                 "reasoning": "Provider default",
@@ -256,26 +255,6 @@ class AgentWebHandler(BaseHTTPRequestHandler):
                 emit({"type": "done", "code": code})
             except (BrokenPipeError, ConnectionResetError):
                 return
-        finally:
-            self.server.run_lock.release()
-
-    def do_DELETE(self) -> None:
-        path = urlsplit(self.path).path
-        if not path.startswith("/api/sessions/"):
-            self.send_json(404, {"error": "not found"})
-            return
-        if not self.server.run_lock.acquire(blocking=False):
-            self.send_json(409, {"error": "another task is already running"})
-            return
-        try:
-            session_id = path[len("/api/sessions/"):]
-            try:
-                session_file = session_path(self.server.root, session_id)
-                session_file.unlink(missing_ok=True)
-            except (OSError, ValueError) as exc:
-                self.send_json(500, {"error": f"unable to clear session: {exc}"})
-                return
-            self.send_json(200, {"ok": True})
         finally:
             self.server.run_lock.release()
 
