@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A small coding agent using an OpenAI-compatible chat-completions API."""
+"""使用 OpenAI 兼容对话接口的简易编程智能体。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,15 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 # 约束模型的工作范围，并说明何时结束当前任务。
-SYSTEM_PROMPT = """You are a concise coding agent.
+SYSTEM_PROMPT = """You are Ycode, a concise coding agent.
 Work only inside the provided workspace. Inspect files before changing them.
 Use the available tools for file operations and commands; do not pretend that a change was made.
 Use web_search only when current external information would help; it is optional.
@@ -113,6 +115,13 @@ WEB_SEARCH_TOOL = {
     },
 }
 
+MODEL_CONTEXT_LIMITS = {
+    "deepseek-v4-flash": 1_048_576,
+    "deepseek-v4-pro": 1_048_576,
+}
+SESSION_DIR_NAME = "sessions"
+DEFAULT_SESSION_ID = "default"
+
 
 # 将模型请求和工具执行所需的可调参数集中保存。
 @dataclass(frozen=True)
@@ -120,13 +129,49 @@ class Config:
     api_key: str
     base_url: str
     model: str
+    context_limit: int | None = None
     max_steps: int = 8
     model_retries: int = 1
     model_timeout: float = 60.0
     command_timeout: float = 20.0
     output_limit: int = 6000
-    search_api_key: str | None = None
     search_model: str = "deepseek-v4-flash"
+
+
+def api_key_from_env() -> str | None:
+    return os.getenv("AGENT_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+
+
+def fetch_models(base_url: str, api_key: str, timeout: float) -> list[str]:
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"model list API returned HTTP {exc.code}: {clip(detail, 1000)}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"model list request failed: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("model list API returned invalid JSON") from exc
+    except UnicodeError as exc:
+        raise RuntimeError("model list API returned invalid UTF-8") from exc
+
+    entries = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise RuntimeError("model list API response did not contain data")
+    models: list[str] = []
+    for entry in entries:
+        model_id = entry.get("id") if isinstance(entry, dict) else None
+        if isinstance(model_id, str) and model_id and model_id not in models:
+            models.append(model_id)
+    if not models:
+        raise RuntimeError("model list API returned no usable models")
+    return models
 
 
 def clip(text: str, limit: int) -> str:
@@ -134,6 +179,87 @@ def clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated at {limit} characters]"
+
+
+def session_path(root: Path, session_id: str) -> Path:
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or len(session_id) > 128
+        or not all(character.isalnum() or character in "-_" for character in session_id)
+    ):
+        raise ValueError("invalid session id")
+    return root / SESSION_DIR_NAME / f"{session_id}.json"
+
+
+def load_session_record(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"unable to read session file: {path.name}") from exc
+    messages = data.get("messages") if isinstance(data, dict) else None
+    if not isinstance(messages, list) or not messages or not all(isinstance(item, dict) for item in messages):
+        raise RuntimeError("session file has invalid message history")
+    if messages[0].get("role") != "system":
+        raise RuntimeError("session file has no system message")
+    prompt_tokens = data.get("prompt_tokens") if isinstance(data, dict) else None
+    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
+        prompt_tokens = None
+    record = dict(data)
+    record["id"] = path.stem
+    record["title"] = record.get("title") if isinstance(record.get("title"), str) else "New session"
+    record["created_at"] = record.get("created_at") if isinstance(record.get("created_at"), str) else ""
+    record["updated_at"] = record.get("updated_at") if isinstance(record.get("updated_at"), str) else ""
+    record["messages"] = messages
+    record["prompt_tokens"] = prompt_tokens
+    return record
+
+
+def load_session(path: Path) -> tuple[list[dict[str, Any]], int | None]:
+    record = load_session_record(path)
+    if record is None:
+        return [], None
+    return record["messages"], record["prompt_tokens"]
+
+
+def session_title(messages: list[dict[str, Any]]) -> str:
+    for message in messages:
+        if message.get("role") != "user" or not isinstance(message.get("content"), str):
+            continue
+        title = " ".join(message["content"].split())
+        if title:
+            return title if len(title) <= 72 else title[:69] + "..."
+    return "New session"
+
+
+def save_session(path: Path, messages: list[dict[str, Any]], prompt_tokens: int | None) -> None:
+    existing = load_session_record(path) if path.is_file() else None
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    data = {
+        "version": 1,
+        "id": existing["id"] if existing else path.stem,
+        "title": session_title(messages),
+        "created_at": existing["created_at"] if existing and existing["created_at"] else now,
+        "updated_at": now,
+        "messages": messages,
+        "prompt_tokens": prompt_tokens,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+
+
+def create_session(root: Path, session_id: str) -> dict[str, Any]:
+    path = session_path(root, session_id)
+    if path.exists():
+        raise FileExistsError("session already exists")
+    messages = [{"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"}]
+    save_session(path, messages, None)
+    record = load_session_record(path)
+    if record is None:
+        raise RuntimeError("unable to create session")
+    return record
 
 
 def workspace_path(root: Path, value: Any) -> Path:
@@ -170,7 +296,7 @@ def write_file(arguments: dict[str, Any], root: Path) -> str:
     if not isinstance(content, str):
         raise ValueError("content must be a string")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path.write_bytes(content.encode("utf-8"))
     return f"Wrote {len(content.encode('utf-8'))} bytes to {path.relative_to(root)}."
 
 
@@ -193,7 +319,7 @@ def replace_text(arguments: dict[str, Any], root: Path) -> str:
         raise ValueError("old text was not found")
     if count > 1 and not replace_all:
         raise ValueError(f"old text occurs {count} times; set replace_all to true")
-    path.write_text(text.replace(old, new, -1 if replace_all else 1), encoding="utf-8")
+    path.write_bytes(text.replace(old, new, -1 if replace_all else 1).encode("utf-8"))
     return f"Replaced {count} occurrence(s) in {path.relative_to(root)}."
 
 
@@ -227,8 +353,6 @@ def web_search(arguments: dict[str, Any], config: Config) -> str:
     query = arguments.get("query")
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must be a non-empty string")
-    if not config.search_api_key:
-        raise ValueError("web search is unavailable; set DEEPSEEK_API_KEY")
 
     payload = {
         "model": config.search_model,
@@ -247,7 +371,7 @@ def web_search(arguments: dict[str, Any], config: Config) -> str:
         "https://api.deepseek.com/anthropic/v1/messages",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
-            "x-api-key": config.search_api_key,
+            "x-api-key": config.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         },
@@ -336,13 +460,12 @@ def execute_tool(name: str, arguments: dict[str, Any], root: Path, config: Confi
     return handler(arguments, root)
 
 
-def request_model(messages: list[dict[str, Any]], config: Config) -> dict[str, Any]:
+def request_model(messages: list[dict[str, Any]], config: Config) -> tuple[dict[str, Any], int | None]:
     # 组装 OpenAI 兼容请求，并对临时网络错误进行有限重试。
-    tools = TOOLS + ([WEB_SEARCH_TOOL] if config.search_api_key else [])
     payload = {
         "model": config.model,
         "messages": messages,
-        "tools": tools,
+        "tools": TOOLS + [WEB_SEARCH_TOOL],
         "tool_choice": "auto",
     }
     request = urllib.request.Request(
@@ -378,7 +501,11 @@ def request_model(messages: list[dict[str, Any]], config: Config) -> dict[str, A
         raise RuntimeError("model API response did not contain a message") from exc
     if not isinstance(message, dict):
         raise RuntimeError("model API message has an invalid format")
-    return message
+    usage = data.get("usage") if isinstance(data, dict) else None
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
+        prompt_tokens = None
+    return message, prompt_tokens
 
 
 def parse_tool_call(call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -405,27 +532,72 @@ def parse_tool_call(call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return call_id, name, arguments
 
 
-def run_agent(task: str, root: Path, config: Config) -> int:
+def print_event(event: dict[str, Any]) -> None:
+    event_type = event["type"]
+    if event_type == "step":
+        print(f"\n[step {event['step']}]")
+    elif event_type == "model":
+        print(f"Model reply:\n{event['content']}")
+    elif event_type == "context":
+        tokens = event["tokens"]
+        limit = event["limit"]
+        if limit is None:
+            print("Context left: unknown")
+        elif tokens is None:
+            print("Context left: not reported")
+        else:
+            print(f"Context left: {max(limit - tokens, 0):,} tokens")
+    elif event_type == "tool_call":
+        arguments = json.dumps(event["arguments"], ensure_ascii=False)
+        print(f"Tool call: {event['name']} {arguments}")
+    elif event_type == "tool_result":
+        print(f"Tool result:\n{event['content']}")
+    elif event_type == "final":
+        print(f"Final answer:\n{event['content'] or '(empty response)'}")
+    elif event_type == "error":
+        print(f"{event['source'].title()} error: {event['message']}")
+    elif event_type == "stopped":
+        print(f"Stopped after {event['max_steps']} steps.")
+
+
+def run_agent(
+    task: str,
+    root: Path,
+    config: Config,
+    emit: Callable[[dict[str, Any]], None] = print_event,
+    session_file: Path | None = None,
+) -> int:
     # 一个任务由多个 step 组成：模型请求工具，工具结果回到历史后继续请求。
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
-        {"role": "user", "content": task},
-    ]
+    if session_file is None:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
+        ]
+        prompt_tokens = None
+    else:
+        messages, prompt_tokens = load_session(session_file)
+        if not messages:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
+            ]
+    messages.append({"role": "user", "content": task})
+    if session_file is not None:
+        save_session(session_file, messages, prompt_tokens)
     for step in range(1, config.max_steps + 1):
-        print(f"\n[step {step}]")
+        emit({"type": "step", "step": step})
         # 获取模型的下一步决定；模型出错时结束当前任务。
         try:
-            message = request_model(messages, config)
+            message, prompt_tokens = request_model(messages, config)
         except RuntimeError as exc:
-            print(f"Model error: {exc}")
+            emit({"type": "error", "source": "model", "message": str(exc)})
             return 1
+        emit({"type": "context", "tokens": prompt_tokens, "limit": config.context_limit})
 
         content = message.get("content") or ""
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
         tool_calls = message.get("tool_calls") or []
         if not isinstance(tool_calls, list):
-            print("Model error: tool_calls has an invalid format")
+            emit({"type": "error", "source": "model", "message": "tool_calls has an invalid format"})
             return 1
 
         # 先保存模型消息，保证下一次请求能看到完整上下文。
@@ -436,43 +608,95 @@ def run_agent(task: str, root: Path, config: Config) -> int:
 
         # 没有工具调用表示模型已经给出最终回答。
         if not tool_calls:
-            print(f"Final answer:\n{content or '(empty response)'}")
+            if session_file is not None:
+                save_session(session_file, messages, prompt_tokens)
+            emit({"type": "final", "content": content})
             return 0
 
         if content:
-            print(f"Model reply:\n{content}")
+            emit({"type": "model", "content": content})
         # 一个响应可以包含多个工具调用，逐个执行并记录结果。
         for call in tool_calls:
             if not isinstance(call, dict):
-                print("Tool error: tool call has an invalid format")
+                emit({"type": "error", "source": "tool", "message": "tool call has an invalid format"})
                 return 1
             try:
                 call_id, name, arguments = parse_tool_call(call)
             except ValueError as exc:
-                print(f"Tool error: {exc}")
+                emit({"type": "error", "source": "tool", "message": str(exc)})
                 return 1
-            print(f"Tool call: {name} {json.dumps(arguments, ensure_ascii=False)}")
+            emit({"type": "tool_call", "name": name, "arguments": arguments})
             try:
                 result = execute_tool(name, arguments, root, config)
             except (OSError, UnicodeError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
                 result = f"Tool error: {exc}"
             result = clip(result, config.output_limit)
-            print(f"Tool result:\n{result}")
+            emit({"type": "tool_result", "name": name, "content": result})
             # 工具结果必须回到历史，模型才能根据执行结果继续工作。
             messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
+        if session_file is not None:
+            save_session(session_file, messages, prompt_tokens)
 
-    print(f"Stopped after {config.max_steps} steps.")
+    emit({"type": "stopped", "max_steps": config.max_steps})
     return 1
+
+
+def build_config(
+    base_url: str | None = None,
+    model: str | None = None,
+    search_model: str | None = None,
+    context_limit: int | None = None,
+    max_steps: int = 8,
+    model_retries: int = 1,
+    model_timeout: float = 60.0,
+    command_timeout: float = 20.0,
+    output_limit: int = 6000,
+) -> Config:
+    # 终端和 Web 服务共用同一套环境变量与默认值。
+    api_key = api_key_from_env()
+    if not api_key:
+        raise ValueError("set AGENT_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY")
+    resolved_base_url = base_url or os.getenv("AGENT_BASE_URL", "https://api.openai.com/v1")
+    resolved_model = model or os.getenv("AGENT_MODEL")
+    if not resolved_model:
+        try:
+            resolved_model = fetch_models(resolved_base_url, api_key, model_timeout)[0]
+        except RuntimeError as exc:
+            raise ValueError(f"unable to choose a model: {exc}") from exc
+    if context_limit is None and os.getenv("AGENT_CONTEXT_LIMIT"):
+        try:
+            context_limit = int(os.environ["AGENT_CONTEXT_LIMIT"])
+        except ValueError as exc:
+            raise ValueError("AGENT_CONTEXT_LIMIT must be a positive integer") from exc
+    if context_limit is None:
+        context_limit = MODEL_CONTEXT_LIMITS.get(resolved_model)
+    if context_limit is not None and context_limit < 1:
+        raise ValueError("context limit must be positive")
+    if max_steps < 1 or model_retries < 0 or model_timeout <= 0 or command_timeout <= 0 or output_limit < 1:
+        raise ValueError("limits must be positive")
+    return Config(
+        api_key=api_key,
+        base_url=resolved_base_url,
+        model=resolved_model,
+        context_limit=context_limit,
+        search_model=search_model or os.getenv("DEEPSEEK_SEARCH_MODEL", "deepseek-v4-flash"),
+        max_steps=max_steps,
+        model_retries=model_retries,
+        model_timeout=model_timeout,
+        command_timeout=command_timeout,
+        output_limit=output_limit,
+    )
 
 
 def parse_args() -> tuple[str, Path, Config]:
     # 命令行参数和环境变量共同组成一次运行配置。
-    parser = argparse.ArgumentParser(description="Run a small coding agent.")
+    parser = argparse.ArgumentParser(description="Run Ycode.")
     parser.add_argument("task", nargs="?", help="Programming task for the agent.")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Workspace directory.")
-    parser.add_argument("--base-url", default=os.getenv("AGENT_BASE_URL", "https://api.openai.com/v1"))
-    parser.add_argument("--model", default=os.getenv("AGENT_MODEL"))
-    parser.add_argument("--search-model", default=os.getenv("DEEPSEEK_SEARCH_MODEL", "deepseek-v4-flash"))
+    parser.add_argument("--base-url")
+    parser.add_argument("--model")
+    parser.add_argument("--search-model")
+    parser.add_argument("--context-limit", type=int)
     parser.add_argument("--max-steps", type=int, default=8)
     parser.add_argument("--model-retries", type=int, default=1)
     parser.add_argument("--model-timeout", type=float, default=60.0)
@@ -483,40 +707,30 @@ def parse_args() -> tuple[str, Path, Config]:
     task = args.task or input("Task: ").strip()
     if not task:
         parser.error("a task is required")
-    api_key = os.getenv("AGENT_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        parser.error("set AGENT_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY")
-    if not args.model:
-        parser.error("set AGENT_MODEL or pass --model")
-    if (
-        args.max_steps < 1
-        or args.model_retries < 0
-        or args.model_timeout <= 0
-        or args.command_timeout <= 0
-        or args.output_limit < 1
-    ):
-        parser.error("limits must be positive")
 
     root = args.root.resolve()
     if not root.is_dir():
         parser.error(f"workspace directory does not exist: {root}")
-    return task, root, Config(
-        api_key=api_key,
-        base_url=args.base_url,
-        model=args.model,
-        search_api_key=os.getenv("DEEPSEEK_API_KEY"),
-        search_model=args.search_model,
-        max_steps=args.max_steps,
-        model_retries=args.model_retries,
-        model_timeout=args.model_timeout,
-        command_timeout=args.command_timeout,
-        output_limit=args.output_limit,
-    )
+    try:
+        config = build_config(
+            base_url=args.base_url,
+            model=args.model,
+            search_model=args.search_model,
+            context_limit=args.context_limit,
+            max_steps=args.max_steps,
+            model_retries=args.model_retries,
+            model_timeout=args.model_timeout,
+            command_timeout=args.command_timeout,
+            output_limit=args.output_limit,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    return task, root, config
 
 
 def main() -> int:
     task, root, config = parse_args()
-    return run_agent(task, root, config)
+    return run_agent(task, root, config, session_file=session_path(root, DEFAULT_SESSION_ID))
 
 
 if __name__ == "__main__":

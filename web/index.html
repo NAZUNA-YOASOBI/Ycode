@@ -1,0 +1,1377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ycode</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121014;
+      --surface: #1b181f;
+      --surface-strong: #242028;
+      --line: #3b3442;
+      --line-soft: #2e2933;
+      --text: #f2eff7;
+      --muted: #aaa3b3;
+      --purple: #a78bfa;
+      --purple-strong: #c4b5fd;
+      --amber: #e5b862;
+      --red: #e47d70;
+      --code: #ded8e5;
+      --radius: 7px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    button,
+    textarea {
+      font: inherit;
+    }
+
+    button:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid var(--purple);
+      outline-offset: 2px;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: 64px minmax(0, 1fr);
+      height: 100%;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: #171419;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      border: 1px solid #625475;
+      border-radius: 9px;
+      background: #251f2d;
+      color: var(--purple-strong);
+    }
+
+    .brand-mark svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .brand-name {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .brand-subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font: 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .run-state {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .state-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 3px rgba(165, 169, 157, 0.1);
+    }
+
+    .run-state[data-state="ready"] .state-dot,
+    .run-state[data-state="done"] .state-dot {
+      background: var(--purple);
+      box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.14);
+    }
+
+    .run-state[data-state="running"] .state-dot {
+      background: var(--amber);
+      box-shadow: 0 0 0 3px rgba(229, 184, 98, 0.14);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
+    .run-state[data-state="error"] .state-dot {
+      background: var(--red);
+      box-shadow: 0 0 0 3px rgba(228, 125, 112, 0.14);
+    }
+
+    @keyframes pulse {
+      50% {
+        opacity: 0.45;
+      }
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .session-sidebar {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--line);
+      background: #171419;
+    }
+
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 18px 16px 12px;
+    }
+
+    .sidebar-title {
+      margin: 0;
+      color: var(--muted);
+      font: 700 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .new-session {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 7px 10px;
+      background: var(--surface-strong);
+      color: var(--code);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .new-session svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .new-session:hover:not(:disabled),
+    .new-session:focus-visible {
+      border-color: var(--purple);
+      background: #30283b;
+      box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.16), 0 0 18px rgba(167, 139, 250, 0.25);
+      color: var(--text);
+      outline: 0;
+    }
+
+    .new-session:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
+
+    .session-list {
+      display: grid;
+      align-content: start;
+      gap: 4px;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 4px 10px 16px;
+    }
+
+    .session-empty {
+      padding: 16px 8px;
+      color: #81798a;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .session-item {
+      display: grid;
+      min-width: 0;
+      gap: 5px;
+      border: 1px solid transparent;
+      border-radius: 13px;
+      padding: 10px 11px;
+      background: transparent;
+      color: var(--code);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .session-item:hover:not(:disabled),
+    .session-item:focus-visible,
+    .session-item[aria-current="true"] {
+      border-color: #63537d;
+      background: #30283b;
+      box-shadow: 0 0 16px rgba(167, 139, 250, 0.14);
+      color: var(--text);
+      outline: 0;
+    }
+
+    .session-item:disabled {
+      cursor: not-allowed;
+      opacity: .65;
+    }
+
+    .session-item-title {
+      min-width: 0;
+      overflow: hidden;
+      font-size: 13px;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .session-item-time {
+      color: #81798a;
+      font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      background: var(--bg);
+    }
+
+    .activity {
+      overflow: auto;
+      scroll-behavior: smooth;
+    }
+
+    .activity-inner {
+      width: min(920px, 100%);
+      min-height: 100%;
+      margin: 0 auto;
+      padding: 34px 34px 44px;
+    }
+
+    .empty-state {
+      display: grid;
+      align-content: center;
+      min-height: min(520px, 65vh);
+      padding: 36px 0;
+    }
+
+    .empty-state[hidden] {
+      display: none;
+    }
+
+    .empty-kicker {
+      margin: 0 0 14px;
+      color: var(--purple);
+      font: 700 14px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .empty-title {
+      max-width: 560px;
+      margin: 0;
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .empty-copy {
+      max-width: 520px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .step-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 30px;
+      margin-top: 12px;
+      color: var(--muted);
+      font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+      text-transform: uppercase;
+    }
+
+    .step-divider::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: var(--line-soft);
+    }
+
+    .event {
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .event.model {
+      border-left-color: #77a6bf;
+    }
+
+    .event.user {
+      border-left-color: #8f9489;
+    }
+
+    .event.tool-call {
+      border-left-color: var(--amber);
+    }
+
+    .event.tool-result {
+      border-left-color: #8f9489;
+    }
+
+    .event.final {
+      border-left-color: var(--purple);
+      background: #1f1a28;
+    }
+
+    .event.error {
+      border-left-color: var(--red);
+      background: #241917;
+    }
+
+    .event-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 38px;
+      gap: 12px;
+      padding: 9px 13px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .event-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .event-body {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      color: var(--code);
+      font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .composer {
+      padding: 12px 24px 16px;
+      background: var(--bg);
+    }
+
+    .composer-shell {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      overflow: visible;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--surface-strong);
+    }
+
+    .composer-shell:focus-within {
+      border-color: var(--purple);
+      box-shadow: 0 0 0 1px var(--purple);
+    }
+
+    .task-input {
+      display: block;
+      width: 100%;
+      min-height: 70px;
+      max-height: 160px;
+      resize: none;
+      border: 0;
+      border-radius: 0;
+      padding: 16px 16px 10px;
+      background: transparent;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .task-input:focus-visible {
+      outline: 0;
+    }
+
+    .task-input::placeholder {
+      color: #81798a;
+    }
+
+    .composer-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: center;
+      min-width: 0;
+      gap: 10px;
+      padding: 8px 12px 12px 16px;
+    }
+
+    .composer-workspace,
+    .composer-runtime,
+    .status-item {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .composer-workspace {
+      max-width: 100%;
+      gap: 7px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .composer-runtime {
+      width: 100%;
+      max-width: 100%;
+      justify-content: flex-start;
+      gap: 18px;
+    }
+
+    .status-item {
+      gap: 6px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .status-label {
+      color: #8f8599;
+    }
+
+    .status-value {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      text-overflow: ellipsis;
+    }
+
+    .model-control {
+      position: relative;
+      min-width: 0;
+    }
+
+    .model-picker {
+      display: inline-flex;
+      align-items: center;
+      max-width: 280px;
+      gap: 7px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 4px 8px;
+      background: transparent;
+      color: var(--code);
+      cursor: pointer;
+    }
+
+    .model-picker:hover:not(:disabled),
+    .model-picker:focus-visible,
+    .model-picker[aria-expanded="true"] {
+      border-color: var(--purple);
+      background: #30283b;
+      box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.16), 0 0 18px rgba(167, 139, 250, 0.3);
+      outline: 0;
+    }
+
+    .model-picker:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .model-picker .status-value {
+      overflow: hidden;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .model-picker-chevron {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 7px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg) translateY(-2px);
+    }
+
+    .model-menu {
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 10px);
+      z-index: 5;
+      display: grid;
+      width: max-content;
+      min-width: 220px;
+      max-width: min(360px, calc(100vw - 36px));
+      max-height: 260px;
+      gap: 3px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 6px;
+      background: #211d26;
+      box-shadow: 0 16px 34px rgba(0, 0, 0, 0.35), 0 0 20px rgba(167, 139, 250, 0.14);
+    }
+
+    .model-menu[hidden] {
+      display: none;
+    }
+
+    .model-option {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: transparent;
+      color: var(--code);
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .model-option:hover,
+    .model-option[aria-selected="true"] {
+      border-color: #63537d;
+      background: #30283b;
+      color: var(--text);
+    }
+
+    .run-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      margin-left: auto;
+      flex: 0 0 38px;
+      border: 1px solid #b9a5ff;
+      border-radius: 50%;
+      padding: 0;
+      background: var(--purple);
+      color: #17121f;
+      font-size: 0;
+      cursor: pointer;
+    }
+
+    .run-button::before {
+      content: "";
+      width: 0;
+      height: 0;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      border-left: 9px solid currentColor;
+    }
+
+    .run-button:hover:not(:disabled) {
+      background: var(--purple-strong);
+    }
+
+    .run-button:disabled {
+      cursor: not-allowed;
+      border-color: #514c57;
+      background: #403b45;
+      color: #7d7685;
+      opacity: 1;
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        grid-template-rows: 58px minmax(0, 1fr);
+      }
+
+      .workspace {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .session-sidebar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .sidebar-header {
+        padding: 10px 12px;
+      }
+
+      .sidebar-title {
+        display: none;
+      }
+
+      .session-list {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 8px 12px 8px 0;
+      }
+
+      .session-item {
+        flex: 0 0 170px;
+        padding: 8px 10px;
+      }
+
+      .session-empty {
+        padding: 8px 0;
+        white-space: nowrap;
+      }
+
+      .topbar {
+        padding: 0 16px;
+      }
+
+      .brand-subtitle {
+        display: none;
+      }
+
+      .composer {
+        padding: 10px 12px 12px;
+      }
+
+      .composer-footer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+        padding: 8px 12px 12px;
+      }
+
+      .composer-workspace {
+        max-width: 100%;
+      }
+
+      .composer-runtime {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) 38px;
+        width: 100%;
+        margin-left: 0;
+        gap: 8px;
+      }
+
+      .model-picker {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .status-item {
+        display: grid;
+        gap: 2px;
+      }
+
+      .activity-inner {
+        padding: 24px 16px 30px;
+      }
+
+      .empty-state {
+        min-height: 340px;
+      }
+
+      .empty-title {
+        font-size: 32px;
+      }
+
+    }
+
+    @media (max-width: 520px) {
+      .composer-runtime {
+        grid-template-areas:
+          "model model run"
+          "reasoning reasoning run"
+          "context context run";
+        grid-template-columns: repeat(2, minmax(0, 1fr)) 38px;
+        row-gap: 4px;
+      }
+
+      .composer-runtime .status-item {
+        display: flex;
+        justify-content: flex-start;
+      }
+
+      .composer-workspace {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 2px;
+        white-space: normal;
+      }
+
+      .composer-workspace .status-value {
+        overflow: visible;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+      }
+
+      .model-control {
+        grid-area: model;
+      }
+
+      .model-picker {
+        width: auto;
+      }
+
+      .reasoning-status {
+        grid-area: reasoning;
+      }
+
+      .context-status {
+        grid-area: context;
+      }
+
+      .run-button {
+        grid-area: run;
+        align-self: end;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        scroll-behavior: auto !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 8.5 16 16.5 24 8.5M16 16.5V25" />
+            <circle cx="8" cy="8.5" r="2" fill="#f2eff7" stroke="none" />
+            <circle cx="24" cy="8.5" r="2" fill="#f2eff7" stroke="none" />
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <h1 class="brand-name">Ycode</h1>
+          <p class="brand-subtitle">coding workspace</p>
+        </div>
+      </div>
+      <div class="run-state" id="runState" data-state="loading" aria-live="polite">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="stateText">Connecting</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="session-sidebar" aria-label="Session history">
+        <div class="sidebar-header">
+          <p class="sidebar-title">Sessions</p>
+          <button class="new-session" id="newSession" type="button" aria-label="Start a new session" title="Start a new session" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            <span>New session</span>
+          </button>
+        </div>
+        <div class="session-list" id="sessionList" aria-live="polite"></div>
+      </aside>
+      <main class="main">
+        <section class="activity" id="activity" aria-label="Agent activity">
+          <div class="activity-inner">
+            <div class="empty-state" id="emptyState">
+              <p class="empty-kicker">WORKSPACE READY</p>
+              <h2 class="empty-title">Ready for a new task.</h2>
+              <p class="empty-copy">No activity yet.</p>
+            </div>
+            <div class="timeline" id="timeline" aria-live="polite"></div>
+          </div>
+        </section>
+
+        <form class="composer" id="taskForm">
+          <div class="composer-shell">
+            <textarea
+              class="task-input"
+              id="taskInput"
+              rows="1"
+              maxlength="12000"
+              placeholder="Describe a programming task..."
+              aria-label="Programming task"
+              required
+            ></textarea>
+            <div class="composer-footer" aria-label="Runtime status">
+              <div class="composer-workspace">
+                <span class="status-label">Workspace</span>
+                <span class="status-value" id="workspaceValue">Loading</span>
+              </div>
+              <div class="composer-runtime">
+                <div class="status-item model-control">
+                  <span class="status-label">Model</span>
+                  <button
+                    class="model-picker"
+                    id="modelPicker"
+                    type="button"
+                    aria-label="Select model"
+                    aria-expanded="false"
+                    disabled
+                  >
+                    <span class="status-value" id="modelValue">Loading</span>
+                    <span class="model-picker-chevron" aria-hidden="true"></span>
+                  </button>
+                  <div class="model-menu" id="modelMenu" role="listbox" aria-label="Available models" hidden></div>
+                </div>
+                <div class="status-item reasoning-status">
+                  <span class="status-label">Reasoning</span>
+                  <span class="status-value" id="reasoningValue">Loading</span>
+                </div>
+                <div class="status-item context-status">
+                  <span class="status-label">Context</span>
+                  <span class="status-value" id="contextValue">Unknown</span>
+                </div>
+                <button
+                  class="run-button"
+                  id="runButton"
+                  type="submit"
+                  aria-label="Run task"
+                  title="Run task"
+                  disabled
+                ></button>
+              </div>
+            </div>
+          </div>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const activity = document.querySelector("#activity");
+    const contextValue = document.querySelector("#contextValue");
+    const emptyState = document.querySelector("#emptyState");
+    const modelValue = document.querySelector("#modelValue");
+    const modelPicker = document.querySelector("#modelPicker");
+    const modelMenu = document.querySelector("#modelMenu");
+    const reasoningValue = document.querySelector("#reasoningValue");
+    const runButton = document.querySelector("#runButton");
+    const runState = document.querySelector("#runState");
+    const newSessionButton = document.querySelector("#newSession");
+    const sessionList = document.querySelector("#sessionList");
+    const stateText = document.querySelector("#stateText");
+    const taskForm = document.querySelector("#taskForm");
+    const taskInput = document.querySelector("#taskInput");
+    const timeline = document.querySelector("#timeline");
+    const workspaceValue = document.querySelector("#workspaceValue");
+    let canRun = false;
+    let selectedModel = "";
+    let availableModels = [];
+    let modelContextLimits = {};
+    let contextLimitOverride = null;
+    let contextLimit = null;
+    let contextReported = false;
+    let activeSessionId = "";
+    let sessions = [];
+    let isRunning = false;
+
+    function setState(state, label) {
+      runState.dataset.state = state;
+      stateText.textContent = label;
+    }
+
+    function updateRunButton() {
+      runButton.disabled = !canRun || isRunning || !activeSessionId || !taskInput.value.trim();
+    }
+
+    function formatSessionTime(value) {
+      if (!value) {
+        return "";
+      }
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return "";
+      }
+      return date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function setSessionControls(disabled) {
+      newSessionButton.disabled = disabled;
+      sessionList.querySelectorAll(".session-item").forEach((item) => {
+        item.disabled = disabled;
+      });
+    }
+
+    function renderSessionList() {
+      sessionList.replaceChildren();
+      if (!sessions.length) {
+        const empty = document.createElement("div");
+        empty.className = "session-empty";
+        empty.textContent = "No sessions yet.";
+        sessionList.append(empty);
+        return;
+      }
+      sessions.forEach((session) => {
+        const item = document.createElement("button");
+        item.className = "session-item";
+        item.type = "button";
+        item.setAttribute("aria-current", session.id === activeSessionId ? "true" : "false");
+        item.disabled = isRunning || Boolean(session.error);
+        item.title = session.error || session.title;
+
+        const title = document.createElement("span");
+        title.className = "session-item-title";
+        title.textContent = session.title || "New session";
+        const time = document.createElement("span");
+        time.className = "session-item-time";
+        time.textContent = formatSessionTime(session.updated_at);
+        item.append(title, time);
+        item.addEventListener("click", () => selectSession(session.id));
+        sessionList.append(item);
+      });
+    }
+
+    function resetTimeline() {
+      timeline.replaceChildren();
+      emptyState.hidden = false;
+      contextReported = false;
+      updateContextLimit();
+      activity.scrollTop = 0;
+    }
+
+    function applySession(session) {
+      activeSessionId = session.id;
+      taskInput.value = "";
+      resizeInput();
+      resetTimeline();
+      const messages = Array.isArray(session.messages) ? session.messages : [];
+      renderSessionHistory(messages);
+      if (Number.isInteger(session.prompt_tokens) && session.prompt_tokens >= 0) {
+        contextReported = true;
+        contextValue.textContent = formatContextUsage(session.prompt_tokens);
+      }
+      renderSessionList();
+      updateRunButton();
+    }
+
+    async function selectSession(sessionId) {
+      if (isRunning || sessionId === activeSessionId) {
+        return;
+      }
+      setSessionControls(true);
+      try {
+        const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `Request failed: HTTP ${response.status}`);
+        }
+        applySession(data.session);
+        setState(canRun ? "ready" : "error", canRun ? "Ready" : "Configuration required");
+      } catch (error) {
+        appendEvent("error", "Session error", error.message);
+      } finally {
+        setSessionControls(false);
+        updateRunButton();
+      }
+    }
+
+    async function createNewSession() {
+      if (isRunning) {
+        return;
+      }
+      setSessionControls(true);
+      try {
+        const response = await fetch("/api/sessions", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `Request failed: HTTP ${response.status}`);
+        }
+        const session = data.session;
+        sessions = [
+          session,
+          ...sessions.filter((item) => item.id !== session.id),
+        ];
+        applySession(session);
+        setState(canRun ? "ready" : "error", canRun ? "Ready" : "Configuration required");
+      } catch (error) {
+        appendEvent("error", "Session error", error.message);
+      } finally {
+        setSessionControls(false);
+        updateRunButton();
+      }
+    }
+
+    async function refreshSessions() {
+      const response = await fetch("/api/sessions", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Session list request failed: HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      renderSessionList();
+    }
+
+    function closeModelMenu() {
+      modelMenu.hidden = true;
+      modelPicker.setAttribute("aria-expanded", "false");
+    }
+
+    function formatContextLimit(tokens) {
+      if (tokens >= 1_000_000) {
+        return `${(tokens / 1_000_000).toFixed(1).replace(".0", "")}M`;
+      }
+      return `${(tokens / 1_000).toFixed(1).replace(".0", "")}k`;
+    }
+
+    function formatContextUsage(tokens) {
+      if (!Number.isInteger(tokens)) {
+        return contextLimit === null ? "Unknown" : `Not reported / ${formatContextLimit(contextLimit)}`;
+      }
+      const used = `${(tokens / 1_000).toFixed(1).replace(".0", "")}k`;
+      if (contextLimit === null) {
+        return `${used} used`;
+      }
+      let percentage = "0%";
+      if (tokens > 0) {
+        const percentageValue = tokens / contextLimit * 100;
+        percentage = percentageValue < 0.1
+          ? "<0.1%"
+          : `${percentageValue.toFixed(1).replace(".0", "")}%`;
+      }
+      return `${percentage} · ${used} / ${formatContextLimit(contextLimit)} used`;
+    }
+
+    function updateContextLimit() {
+      const modelLimit = Number(modelContextLimits[selectedModel]);
+      contextLimit = contextLimitOverride
+        ?? (Number.isInteger(modelLimit) && modelLimit > 0 ? modelLimit : null);
+      contextValue.textContent = formatContextUsage(null);
+    }
+
+    function renderModelMenu() {
+      modelMenu.replaceChildren();
+      availableModels.forEach((model) => {
+        const option = document.createElement("button");
+        option.className = "model-option";
+        option.type = "button";
+        option.role = "option";
+        option.textContent = model;
+        option.title = model;
+        option.setAttribute("aria-selected", model === selectedModel ? "true" : "false");
+        option.addEventListener("click", () => {
+          selectedModel = model;
+          modelValue.textContent = model;
+          modelValue.title = model;
+          updateContextLimit();
+          closeModelMenu();
+          renderModelMenu();
+        });
+        modelMenu.append(option);
+      });
+    }
+
+    function appendStep(step) {
+      const divider = document.createElement("div");
+      divider.className = "step-divider";
+      divider.textContent = `Step ${step}`;
+      timeline.append(divider);
+    }
+
+    function appendEvent(kind, title, content, name = "") {
+      const item = document.createElement("article");
+      item.className = `event ${kind}`;
+
+      const header = document.createElement("div");
+      header.className = "event-header";
+      const label = document.createElement("span");
+      label.textContent = title;
+      const detail = document.createElement("span");
+      detail.className = "event-name";
+      detail.textContent = name;
+      header.append(label, detail);
+
+      const body = document.createElement("pre");
+      body.className = "event-body";
+      body.textContent = content;
+      item.append(header, body);
+      timeline.append(item);
+    }
+
+    function renderSessionHistory(messages) {
+      messages.forEach((message) => {
+        if (!message || typeof message !== "object") {
+          return;
+        }
+        if (message.role === "user") {
+          appendEvent("user", "User task", typeof message.content === "string" ? message.content : "");
+          return;
+        }
+        if (message.role === "assistant") {
+          if (typeof message.content === "string" && message.content) {
+            appendEvent("model", "Model reply", message.content);
+          }
+          if (!Array.isArray(message.tool_calls)) {
+            return;
+          }
+          message.tool_calls.forEach((call) => {
+            const functionData = call && typeof call === "object" ? call.function : null;
+            if (!functionData || typeof functionData !== "object") {
+              return;
+            }
+            let argumentsText = functionData.arguments || "{}";
+            try {
+              argumentsText = JSON.stringify(JSON.parse(argumentsText), null, 2);
+            } catch (error) {
+              argumentsText = String(argumentsText);
+            }
+            appendEvent("tool-call", "Tool call", argumentsText, functionData.name || "");
+          });
+          return;
+        }
+        if (message.role === "tool") {
+          appendEvent("tool-result", "Tool result", typeof message.content === "string" ? message.content : "", message.tool_call_id || "");
+        }
+      });
+      if (messages.length) {
+        emptyState.hidden = true;
+      }
+    }
+
+    function renderEvent(event) {
+      if (event.type === "step") {
+        appendStep(event.step);
+      } else if (event.type === "context") {
+        contextReported = true;
+        contextLimit = Number.isInteger(event.limit) && event.limit > 0 ? event.limit : null;
+        contextValue.textContent = formatContextUsage(event.tokens);
+      } else if (event.type === "model") {
+        appendEvent("model", "Model reply", event.content);
+      } else if (event.type === "tool_call") {
+        appendEvent("tool-call", "Tool call", JSON.stringify(event.arguments, null, 2), event.name);
+      } else if (event.type === "tool_result") {
+        appendEvent("tool-result", "Tool result", event.content, event.name);
+      } else if (event.type === "final") {
+        appendEvent("final", "Final answer", event.content || "(empty response)");
+      } else if (event.type === "error") {
+        appendEvent("error", `${event.source} error`, event.message);
+      } else if (event.type === "stopped") {
+        appendEvent("error", "Stopped", `Maximum step count reached: ${event.max_steps}`);
+      }
+      activity.scrollTop = activity.scrollHeight;
+    }
+
+    async function loadConfig() {
+      try {
+        const response = await fetch("/api/config", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Configuration request failed: HTTP ${response.status}`);
+        }
+        const config = await response.json();
+        availableModels = Array.isArray(config.models) ? config.models : [];
+        selectedModel = config.model !== "Not configured" ? config.model : "";
+        modelValue.textContent = selectedModel || "Not configured";
+        modelValue.title = selectedModel;
+        modelPicker.disabled = availableModels.length === 0 || Boolean(config.model_error);
+        modelPicker.title = config.model_error || "Select model";
+        renderModelMenu();
+        reasoningValue.textContent = config.reasoning;
+        workspaceValue.textContent = config.workspace;
+        workspaceValue.title = config.workspace;
+        const parsedLimit = Number(config.context_limit);
+        contextLimitOverride = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null;
+        modelContextLimits = config.context_limits && typeof config.context_limits === "object"
+          ? config.context_limits
+          : {};
+        updateContextLimit();
+        sessions = Array.isArray(config.sessions) ? config.sessions : [];
+        const session = config.session && typeof config.session === "object" ? config.session : null;
+        if (session) {
+          applySession(session);
+        } else {
+          resetTimeline();
+          renderSessionList();
+        }
+        newSessionButton.disabled = false;
+        if (config.session_error) {
+          appendEvent("error", "Session error", config.session_error);
+        }
+        canRun = config.api_configured && Boolean(selectedModel) && !config.model_error;
+        updateRunButton();
+        const errorLabel = config.model_error ? "Model list unavailable" : "Configuration required";
+        setState(canRun ? "ready" : "error", canRun ? "Ready" : errorLabel);
+      } catch (error) {
+        canRun = false;
+        updateRunButton();
+        newSessionButton.disabled = true;
+        setState("error", "Disconnected");
+        appendEvent("error", "Connection error", error.message);
+      }
+    }
+
+    function resizeInput() {
+      taskInput.style.height = "auto";
+      taskInput.style.height = `${Math.min(taskInput.scrollHeight, 160)}px`;
+    }
+
+    async function runTask(task) {
+      isRunning = true;
+      setState("running", "Running");
+      updateRunButton();
+      taskInput.disabled = true;
+      setSessionControls(true);
+      emptyState.hidden = true;
+      appendEvent("user", "User task", task);
+      taskInput.value = "";
+      resizeInput();
+      contextReported = false;
+      contextValue.textContent = contextLimit === null
+        ? "Calculating"
+        : `Calculating / ${formatContextLimit(contextLimit)}`;
+
+      try {
+        const response = await fetch("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task, model: selectedModel, session_id: activeSessionId }),
+        });
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || `Request failed: HTTP ${response.status}`);
+        }
+        if (!response.body) {
+          throw new Error("Streaming response is unavailable");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let exitCode = 1;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) {
+              continue;
+            }
+            const event = JSON.parse(line);
+            if (event.type === "done") {
+              exitCode = event.code;
+            } else {
+              renderEvent(event);
+            }
+          }
+          if (done) {
+            break;
+          }
+        }
+        setState(exitCode === 0 ? "done" : "error", exitCode === 0 ? "Complete" : "Stopped");
+        try {
+          await refreshSessions();
+        } catch (error) {
+          appendEvent("error", "Session list error", error.message);
+        }
+      } catch (error) {
+        appendEvent("error", "Run error", error.message);
+        setState("error", "Failed");
+      } finally {
+        if (!contextReported) {
+          contextValue.textContent = formatContextUsage(null);
+        }
+        isRunning = false;
+        renderSessionList();
+        updateRunButton();
+        setSessionControls(false);
+        taskInput.disabled = false;
+        taskInput.focus();
+      }
+    }
+
+    taskInput.addEventListener("input", () => {
+      resizeInput();
+      updateRunButton();
+    });
+    newSessionButton.addEventListener("click", createNewSession);
+    modelPicker.addEventListener("click", () => {
+      const expanded = modelPicker.getAttribute("aria-expanded") === "true";
+      if (expanded) {
+        closeModelMenu();
+      } else if (availableModels.length) {
+        modelMenu.hidden = false;
+        modelPicker.setAttribute("aria-expanded", "true");
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (!modelPicker.contains(event.target) && !modelMenu.contains(event.target)) {
+        closeModelMenu();
+      }
+    });
+    taskInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        taskForm.requestSubmit();
+      }
+    });
+    taskForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const task = taskInput.value.trim();
+      if (task && !runButton.disabled) {
+        runTask(task);
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>
