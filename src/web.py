@@ -44,7 +44,7 @@ def get_model_options() -> tuple[list[str], str | None, str | None]:
     api_key = api_key_from_env()
     if not api_key:
         return [], configured_model, "API key is not configured"
-    base_url = os.getenv("AGENT_BASE_URL", "https://api.openai.com/v1")
+    base_url = os.getenv("AGENT_BASE_URL", "https://api.deepseek.com/v1")
     try:
         models = fetch_models(base_url, api_key, MODEL_LIST_TIMEOUT)
     except RuntimeError as exc:

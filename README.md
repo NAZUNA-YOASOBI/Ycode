@@ -8,6 +8,7 @@ Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容
 - `run_command`：在工作目录中执行命令，并限制运行时间。
 - `web_search`：调用 DeepSeek 服务端原生网页搜索。
 - Agent 循环：解析模型回复、执行工具、保存结果并继续请求模型。
+- 流式响应：按 SSE 增量显示推理、正文和工具调用参数。
 - 模型选择：从兼容接口的 `/models` 列表读取可用模型。
 - 推理等级：已知 DeepSeek V4 模型可选择 `Off`、`Low`、`High`、`Max`，默认由提供商决定。
 - 思考过程：显示模型返回的 `reasoning_content`，支持 Markdown 渲染，并与工具调用按实际顺序归入可折叠的工作过程。
@@ -27,7 +28,7 @@ PowerShell：
 
 ```powershell
 $env:AGENT_API_KEY = "your-api-key"
-$env:AGENT_BASE_URL = "https://api.openai.com/v1"
+$env:AGENT_BASE_URL = "https://api.deepseek.com/v1"
 ```
 
 运行终端 Agent：
@@ -49,7 +50,7 @@ python src/web.py
 | 环境变量 | 作用 |
 | --- | --- |
 | `AGENT_API_KEY` | 主 Agent 使用的 API key |
-| `AGENT_BASE_URL` | OpenAI 兼容接口地址，默认是 `https://api.openai.com/v1` |
+| `AGENT_BASE_URL` | OpenAI 兼容接口地址，默认是 `https://api.deepseek.com/v1` |
 | `AGENT_MODEL` | 默认主模型；不设置时使用远端模型列表中的第一个模型 |
 | `AGENT_CONTEXT_LIMIT` | 覆盖上下文上限，单位为 token |
 | `DEEPSEEK_SEARCH_MODEL` | 网页搜索模型，默认是 `deepseek-v4-flash` |
@@ -74,7 +75,7 @@ requirement/                 题目要求
 
 ```text
 用户任务
-  -> 模型请求
+  -> 模型 SSE 流式请求
   -> 解析普通回复或工具调用
   -> 在本地工作目录执行工具
   -> 保存工具结果到会话历史

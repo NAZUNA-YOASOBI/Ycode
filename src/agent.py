@@ -9,7 +9,7 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -473,13 +473,130 @@ def execute_tool(name: str, arguments: dict[str, Any], root: Path, config: Confi
     return handler(arguments, root)
 
 
-def request_model(messages: list[dict[str, Any]], config: Config) -> tuple[dict[str, Any], int | None]:
-    # 组装 OpenAI 兼容请求，并对临时网络错误进行有限重试。
+def iter_stream_data(response: Any) -> Iterator[str]:
+    """读取 OpenAI 兼容接口返回的 SSE data 事件。"""
+    data_lines: list[str] = []
+    for raw_line in response:
+        line = raw_line.decode("utf-8").rstrip("\r\n")
+        if not line:
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+        elif not data_lines and not line.startswith(("event:", "id:", "retry:", ":")):
+            data_lines.append(line)
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def merge_tool_call_delta(
+    tool_calls: dict[int, dict[str, Any]],
+    delta: dict[str, Any],
+    emit: Callable[[dict[str, Any]], None],
+) -> None:
+    index = delta.get("index")
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        return
+    call = tool_calls.setdefault(index, {
+        "id": "",
+        "type": "function",
+        "function": {"name": "", "arguments": ""},
+    })
+    event: dict[str, Any] = {"type": "tool_call_delta", "index": index}
+    call_id = delta.get("id")
+    if isinstance(call_id, str) and call_id:
+        call["id"] = call_id
+        event["id"] = call_id
+    function = delta.get("function")
+    if not isinstance(function, dict):
+        return
+    name = function.get("name")
+    if isinstance(name, str) and name:
+        call["function"]["name"] += name
+        event["name"] = name
+    arguments = function.get("arguments")
+    if isinstance(arguments, str) and arguments:
+        call["function"]["arguments"] += arguments
+        event["arguments"] = arguments
+    if len(event) > 2:
+        emit(event)
+
+
+def consume_model_stream(
+    response: Any,
+    emit: Callable[[dict[str, Any]], None],
+    stream_status: dict[str, bool] | None = None,
+) -> tuple[dict[str, Any], int | None]:
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
+    prompt_tokens: int | None = None
+    for raw_event in iter_stream_data(response):
+        if raw_event == "[DONE]":
+            break
+        try:
+            data = json.loads(raw_event)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("model stream returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            continue
+        usage = data.get("usage")
+        candidate_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        if isinstance(candidate_tokens, int) and not isinstance(candidate_tokens, bool) and candidate_tokens >= 0:
+            prompt_tokens = candidate_tokens
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            if stream_status is not None:
+                stream_status["started"] = True
+            reasoning_parts.append(reasoning)
+            emit({"type": "reasoning_delta", "content": reasoning})
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            if stream_status is not None:
+                stream_status["started"] = True
+            content_parts.append(content)
+            emit({"type": "model_delta", "content": content})
+        deltas = delta.get("tool_calls")
+        if isinstance(deltas, list):
+            if stream_status is not None and any(isinstance(item, dict) for item in deltas):
+                stream_status["started"] = True
+            for tool_delta in deltas:
+                if isinstance(tool_delta, dict):
+                    merge_tool_call_delta(tool_calls, tool_delta, emit)
+
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+    reasoning_content = "".join(reasoning_parts)
+    if reasoning_content:
+        message["reasoning_content"] = reasoning_content
+    if tool_calls:
+        message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+    return message, prompt_tokens
+
+
+def request_model(
+    messages: list[dict[str, Any]],
+    config: Config,
+    emit: Callable[[dict[str, Any]], None],
+) -> tuple[dict[str, Any], int | None]:
+    # 组装 OpenAI 兼容请求，并按 SSE 增量读取模型响应。
     payload = {
         "model": config.model,
         "messages": messages,
         "tools": TOOLS + [WEB_SEARCH_TOOL],
         "tool_choice": "auto",
+        "stream": True,
+        "stream_options": {"include_usage": True},
     }
     # 默认模式不发送推理字段，其余等级按 DeepSeek 协议转换。
     if config.reasoning_effort == "off":
@@ -487,44 +604,30 @@ def request_model(messages: list[dict[str, Any]], config: Config) -> tuple[dict[
     elif config.reasoning_effort is not None:
         payload["thinking"] = {"type": "enabled"}
         payload["reasoning_effort"] = MODEL_REASONING_EFFORTS[config.model][config.reasoning_effort]
-    request = urllib.request.Request(
-        f"{config.base_url.rstrip('/')}/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     for attempt in range(config.model_retries + 1):
+        stream_status = {"started": False}
+        request = urllib.request.Request(
+            f"{config.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(request, timeout=config.model_timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            break
+                return consume_model_stream(response, emit, stream_status)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"model API returned HTTP {exc.code}: {clip(detail, 1000)}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
-            if attempt == config.model_retries:
+            if stream_status["started"] or attempt == config.model_retries:
                 raise RuntimeError(f"model request failed: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("model API returned invalid JSON") from exc
         except UnicodeError as exc:
-            raise RuntimeError("model API returned invalid UTF-8") from exc
-    else:
-        raise RuntimeError("model request failed")
-
-    try:
-        message = data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("model API response did not contain a message") from exc
-    if not isinstance(message, dict):
-        raise RuntimeError("model API message has an invalid format")
-    usage = data.get("usage") if isinstance(data, dict) else None
-    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
-        prompt_tokens = None
-    return message, prompt_tokens
+            raise RuntimeError("model stream returned invalid UTF-8") from exc
+    raise RuntimeError("model request failed")
 
 
 def parse_tool_call(call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -555,8 +658,8 @@ def print_event(event: dict[str, Any]) -> None:
     event_type = event["type"]
     if event_type == "step":
         print(f"\n[step {event['step']}]")
-    elif event_type == "model":
-        print(f"Model reply:\n{event['content']}")
+    elif event_type in {"reasoning_delta", "model_delta"}:
+        print(event["content"], end="", flush=True)
     elif event_type == "context":
         tokens = event["tokens"]
         limit = event["limit"]
@@ -566,13 +669,18 @@ def print_event(event: dict[str, Any]) -> None:
             print("Context left: not reported")
         else:
             print(f"Context left: {max(limit - tokens, 0):,} tokens")
-    elif event_type == "tool_call":
-        arguments = json.dumps(event["arguments"], ensure_ascii=False)
-        print(f"Tool call: {event['name']} {arguments}")
+    elif event_type == "tool_call_delta":
+        if event.get("name"):
+            print(f"\nTool call: {event['name']} ", end="", flush=True)
+        if event.get("arguments"):
+            print(event["arguments"], end="", flush=True)
     elif event_type == "tool_result":
         print(f"Tool result:\n{event['content']}")
     elif event_type == "final":
-        print(f"Final answer:\n{event['content'] or '(empty response)'}")
+        if event.get("streamed"):
+            print()
+        else:
+            print(f"Final answer:\n{event['content'] or '(empty response)'}")
     elif event_type == "error":
         print(f"{event['source'].title()} error: {event['message']}")
     elif event_type == "stopped":
@@ -605,7 +713,7 @@ def run_agent(
         emit({"type": "step", "step": step})
         # 获取模型的下一步决定；模型出错时结束当前任务。
         try:
-            message, prompt_tokens = request_model(messages, config)
+            message, prompt_tokens = request_model(messages, config, emit)
         except RuntimeError as exc:
             emit({"type": "error", "source": "model", "message": str(exc)})
             return 1
@@ -627,20 +735,16 @@ def run_agent(
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
         messages.append(assistant_message)
-        if isinstance(reasoning_content, str) and reasoning_content:
-            emit({"type": "reasoning", "content": reasoning_content})
 
         # 没有工具调用表示模型已经给出最终回答。
         if not tool_calls:
             if session_file is not None:
                 save_session(session_file, messages, prompt_tokens)
-            emit({"type": "final", "content": content})
+            emit({"type": "final", "content": content, "streamed": bool(content)})
             return 0
 
-        if content:
-            emit({"type": "model", "content": content})
         # 一个响应可以包含多个工具调用，逐个执行并记录结果。
-        for call in tool_calls:
+        for index, call in enumerate(tool_calls):
             if not isinstance(call, dict):
                 emit({"type": "error", "source": "tool", "message": "tool call has an invalid format"})
                 return 1
@@ -649,13 +753,18 @@ def run_agent(
             except ValueError as exc:
                 emit({"type": "error", "source": "tool", "message": str(exc)})
                 return 1
-            emit({"type": "tool_call", "name": name, "arguments": arguments})
+            emit({
+                "type": "tool_call_complete",
+                "index": index,
+                "name": name,
+                "arguments": arguments,
+            })
             try:
                 result = execute_tool(name, arguments, root, config)
             except (OSError, UnicodeError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
                 result = f"Tool error: {exc}"
             result = clip(result, config.output_limit)
-            emit({"type": "tool_result", "name": name, "content": result})
+            emit({"type": "tool_result", "index": index, "name": name, "content": result})
             # 工具结果必须回到历史，模型才能根据执行结果继续工作。
             messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
         if session_file is not None:
@@ -681,7 +790,7 @@ def build_config(
     api_key = api_key_from_env()
     if not api_key:
         raise ValueError("set AGENT_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY")
-    resolved_base_url = base_url or os.getenv("AGENT_BASE_URL", "https://api.openai.com/v1")
+    resolved_base_url = base_url or os.getenv("AGENT_BASE_URL", "https://api.deepseek.com/v1")
     resolved_model = model or os.getenv("AGENT_MODEL")
     if not resolved_model:
         try:

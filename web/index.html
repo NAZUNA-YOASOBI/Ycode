@@ -1204,6 +1204,9 @@
     let activeToolGroup = null;
     let pendingToolSteps = [];
     let pendingToolEvent = null;
+    let activeTextStream = null;
+    let pendingModelStream = null;
+    let streamedToolCalls = new Map();
     let markdownLoader = null;
     let mathRendererLoader = null;
     const markdownBodies = new Set();
@@ -1276,6 +1279,9 @@
       activeToolGroup = null;
       pendingToolSteps = [];
       pendingToolEvent = null;
+      activeTextStream = null;
+      pendingModelStream = null;
+      streamedToolCalls = new Map();
       emptyState.hidden = false;
       contextReported = false;
       updateContextLimit();
@@ -1683,6 +1689,60 @@
       return item;
     }
 
+    function createStreamEvent(kind, title, parent) {
+      const item = createEvent(kind, title, "");
+      const body = item.querySelector(".event-body");
+      parent.append(item);
+      return { item, body, kind, parent, content: "", inProcess: parent !== timeline };
+    }
+
+    function appendStreamContent(stream, content) {
+      stream.content += content;
+      renderMarkdown(stream.body, stream.content);
+    }
+
+    function setEventTitle(item, title) {
+      const label = item.querySelector(".event-header > span");
+      if (label) {
+        label.textContent = title;
+      }
+    }
+
+    function moveModelStreamToProcess(stream) {
+      if (!stream || stream.inProcess) {
+        return;
+      }
+      const process = ensureProcess();
+      flushPendingSteps(process);
+      process.body.append(stream.item);
+      stream.item.classList.remove("final");
+      stream.item.classList.add("model");
+      setEventTitle(stream.item, "Model reply");
+      stream.parent = process.body;
+      stream.inProcess = true;
+    }
+
+    function appendReasoningDelta(content) {
+      activeToolGroup = null;
+      const process = ensureProcess();
+      flushPendingSteps(process);
+      if (!activeTextStream || activeTextStream.kind !== "reasoning" || activeTextStream.parent !== process.body) {
+        activeTextStream = createStreamEvent("reasoning", "Thinking", process.body);
+      }
+      appendStreamContent(activeTextStream, content);
+    }
+
+    function appendModelDelta(content) {
+      if (!activeTextStream || activeTextStream.kind !== "model") {
+        activeToolGroup = null;
+      }
+      if (!pendingModelStream) {
+        pendingModelStream = createStreamEvent("final", "Final answer", timeline);
+      }
+      activeTextStream = pendingModelStream;
+      appendStreamContent(pendingModelStream, content);
+    }
+
     function flushPendingSteps(process) {
       if (pendingToolSteps.length) {
         process.body.append(...pendingToolSteps);
@@ -1719,16 +1779,61 @@
       const item = document.createElement("details");
       item.className = "tool-event";
       const parts = document.createElement("div");
-      parts.append(createToolPart("Call", argumentsText));
+      const call = createToolPart("Call", argumentsText);
+      parts.append(call);
       item.append(createEventHeader("summary", "Tool", name), parts);
       group.tools.append(item);
       group.size += 1;
       group.count.textContent = `· ${group.size}`;
-      return parts;
+      return {
+        parts,
+        callBody: call.querySelector(".event-body"),
+        nameLabel: item.querySelector(".event-name"),
+        name,
+        argumentsText,
+      };
     }
 
-    function appendToolResult(parts, content) {
-      parts.append(createToolPart("Result", content));
+    function appendToolResult(toolEvent, content) {
+      toolEvent.parts.append(createToolPart("Result", content));
+    }
+
+    function appendToolCallDelta(event) {
+      moveModelStreamToProcess(pendingModelStream);
+      const process = ensureProcess();
+      flushPendingSteps(process);
+      if (!activeToolGroup) {
+        activeToolGroup = appendToolGroup(process);
+      }
+      const index = Number.isInteger(event.index) && event.index >= 0 ? event.index : streamedToolCalls.size;
+      let toolEvent = streamedToolCalls.get(index);
+      if (!toolEvent) {
+        toolEvent = appendToolEvent(activeToolGroup, "", "");
+        streamedToolCalls.set(index, toolEvent);
+      }
+      if (event.name) {
+        toolEvent.name += event.name;
+        toolEvent.nameLabel.textContent = toolEvent.name;
+      }
+      if (event.arguments) {
+        toolEvent.argumentsText += event.arguments;
+        toolEvent.callBody.textContent = toolEvent.argumentsText;
+      }
+      pendingToolEvent = toolEvent;
+      activeTextStream = null;
+    }
+
+    function completeToolCall(event) {
+      const toolEvent = streamedToolCalls.get(event.index);
+      if (!toolEvent) {
+        return;
+      }
+      if (event.name) {
+        toolEvent.name = event.name;
+        toolEvent.nameLabel.textContent = event.name;
+      }
+      toolEvent.argumentsText = JSON.stringify(event.arguments || {}, null, 2);
+      toolEvent.callBody.textContent = toolEvent.argumentsText;
     }
 
     function renderSessionHistory(messages) {
@@ -1801,48 +1906,71 @@
 
     function renderEvent(event) {
       if (event.type === "step") {
+        activeTextStream = null;
+        pendingModelStream = null;
+        pendingToolEvent = null;
+        streamedToolCalls = new Map();
+        activeToolGroup = null;
         appendStep(event.step);
       } else if (event.type === "context") {
         contextReported = true;
         contextLimit = Number.isInteger(event.limit) && event.limit > 0 ? event.limit : null;
         contextValue.textContent = formatContextUsage(event.tokens);
-      } else if (event.type === "reasoning") {
-        activeToolGroup = null;
-        const process = ensureProcess();
-        flushPendingSteps(process);
-        appendProcessEvent(process, "reasoning", "Thinking", event.content);
-      } else if (event.type === "model") {
-        activeToolGroup = null;
-        const process = ensureProcess();
-        flushPendingSteps(process);
-        appendProcessEvent(process, "model", "Model reply", event.content);
-      } else if (event.type === "tool_call") {
-        const process = ensureProcess();
-        flushPendingSteps(process);
-        if (!activeToolGroup) {
-          activeToolGroup = appendToolGroup(process);
-        }
-        pendingToolEvent = appendToolEvent(
-          activeToolGroup,
-          event.name,
-          JSON.stringify(event.arguments, null, 2),
-        );
+      } else if (event.type === "reasoning_delta") {
+        appendReasoningDelta(event.content || "");
+      } else if (event.type === "model_delta") {
+        appendModelDelta(event.content || "");
+      } else if (event.type === "tool_call_delta") {
+        appendToolCallDelta(event);
+      } else if (event.type === "tool_call_complete") {
+        completeToolCall(event);
       } else if (event.type === "tool_result") {
-        if (pendingToolEvent) {
-          appendToolResult(pendingToolEvent, event.content);
-          pendingToolEvent = null;
+        const toolEvent = Number.isInteger(event.index)
+          ? streamedToolCalls.get(event.index)
+          : pendingToolEvent;
+        if (toolEvent) {
+          appendToolResult(toolEvent, event.content);
+          if (toolEvent === pendingToolEvent) {
+            pendingToolEvent = null;
+          }
         }
       } else if (event.type === "final") {
         activeToolGroup = null;
         pendingToolSteps = [];
-        appendEvent("final", "Final answer", event.content || "(empty response)");
+        pendingToolEvent = null;
+        if (event.streamed && pendingModelStream) {
+          if (!pendingModelStream.content && event.content) {
+            appendStreamContent(pendingModelStream, event.content);
+          }
+          if (pendingModelStream.inProcess) {
+            timeline.append(pendingModelStream.item);
+            pendingModelStream.inProcess = false;
+            pendingModelStream.parent = timeline;
+          }
+          pendingModelStream.item.classList.remove("model");
+          pendingModelStream.item.classList.add("final");
+          setEventTitle(pendingModelStream.item, "Final answer");
+        } else {
+          appendEvent("final", "Final answer", event.content || "(empty response)");
+        }
+        activeTextStream = null;
+        pendingModelStream = null;
+        streamedToolCalls = new Map();
       } else if (event.type === "error") {
         activeToolGroup = null;
         pendingToolSteps = [];
+        pendingToolEvent = null;
+        activeTextStream = null;
+        pendingModelStream = null;
+        streamedToolCalls = new Map();
         appendEvent("error", `${event.source} error`, event.message);
       } else if (event.type === "stopped") {
         activeToolGroup = null;
         pendingToolSteps = [];
+        pendingToolEvent = null;
+        activeTextStream = null;
+        pendingModelStream = null;
+        streamedToolCalls = new Map();
         appendEvent("error", "Stopped", `Maximum step count reached: ${event.max_steps}`);
       }
       activity.scrollTop = activity.scrollHeight;
@@ -1911,6 +2039,9 @@
       activeToolGroup = null;
       pendingToolSteps = [];
       pendingToolEvent = null;
+      activeTextStream = null;
+      pendingModelStream = null;
+      streamedToolCalls = new Map();
       setState("running", "Running");
       updateRunButton();
       taskInput.disabled = true;
