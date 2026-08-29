@@ -4,7 +4,7 @@ Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容
 
 ## 功能
 
-- `read_file`、`list_files`、`write_file`、`replace_text`：本地文件工具。
+- `glob`、`grep`、`read_file`、`list_files`、`write_file`、`replace_text`：受工作目录限制的本地文件工具。
 - `run_command`：在工作目录中执行命令，并限制运行时间。
 - `web_search`：调用 DeepSeek 服务端原生网页搜索。
 - Agent 循环：解析模型回复、执行工具、保存结果并继续请求模型。

@@ -34,8 +34,42 @@ TOOLS = [
             "description": "Read a UTF-8 text file inside the workspace.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "description": "First line to read, 1-based and inclusive."},
+                    "end_line": {"type": "integer", "description": "Last line to read, 1-based and inclusive."},
+                },
                 "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": "Find files matching a glob pattern inside the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string", "description": "Relative pattern such as **/*.py."}},
+                "required": ["pattern"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Search UTF-8 text files for a literal string inside the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "path": {"type": "string", "description": "File or directory to search, default is ."},
+                    "max_results": {"type": "integer", "description": "Maximum matches to return, default is 500."},
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
@@ -544,7 +578,72 @@ def read_file(arguments: dict[str, Any], root: Path) -> str:
     path = workspace_path(root, arguments.get("path"))
     if not path.is_file():
         raise ValueError(f"not a file: {path.relative_to(root)}")
-    return path.read_text(encoding="utf-8")
+    start_line = arguments.get("start_line", 1)
+    end_line = arguments.get("end_line")
+    if not isinstance(start_line, int) or isinstance(start_line, bool) or start_line < 1:
+        raise ValueError("start_line must be a positive integer")
+    if end_line is not None and (
+        not isinstance(end_line, int)
+        or isinstance(end_line, bool)
+        or end_line < start_line
+    ):
+        raise ValueError("end_line must be an integer at least start_line")
+    text = path.read_text(encoding="utf-8")
+    if start_line == 1 and end_line is None:
+        return text
+    lines = text.splitlines(keepends=True)
+    return "".join(lines[start_line - 1:end_line])
+
+
+def glob_files(arguments: dict[str, Any], root: Path) -> str:
+    pattern = arguments.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("pattern must be a non-empty string")
+    pattern_path = Path(pattern)
+    if pattern_path.is_absolute() or ".." in pattern_path.parts:
+        raise ValueError("pattern must stay inside the workspace")
+    matches: set[str] = set()
+    for path in root.glob(pattern):
+        try:
+            resolved = path.resolve()
+            relative = resolved.relative_to(root)
+        except ValueError:
+            continue
+        if resolved.is_file():
+            matches.add(relative.as_posix())
+    return "\n".join(sorted(matches)) or "(no matches)"
+
+
+def grep_files(arguments: dict[str, Any], root: Path) -> str:
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query:
+        raise ValueError("query must be a non-empty string")
+    path = workspace_path(root, arguments.get("path", "."))
+    max_results = arguments.get("max_results", 500)
+    if not isinstance(max_results, int) or isinstance(max_results, bool) or max_results < 1:
+        raise ValueError("max_results must be a positive integer")
+    if path.is_file():
+        candidates = [path]
+    elif path.is_dir():
+        candidates = sorted(path.rglob("*"))
+    else:
+        raise ValueError(f"not a file or directory: {path.relative_to(root)}")
+    matches: list[str] = []
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            resolved = candidate.resolve()
+            relative = resolved.relative_to(root)
+            text = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if query in line:
+                matches.append(f"{relative.as_posix()}:{line_number}:{line}")
+                if len(matches) >= max_results:
+                    return "\n".join(matches)
+    return "\n".join(matches) or "(no matches)"
 
 
 def list_files(arguments: dict[str, Any], root: Path) -> str:
@@ -708,6 +807,8 @@ def web_search(arguments: dict[str, Any], config: Config) -> str:
 # 文件工具按名称注册，命令和网页搜索因需要额外参数而单独分派。
 TOOL_HANDLERS = {
     "read_file": read_file,
+    "glob": glob_files,
+    "grep": grep_files,
     "list_files": list_files,
     "write_file": write_file,
     "replace_text": replace_text,
