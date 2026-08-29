@@ -235,23 +235,61 @@ def prefix_has_balanced_tools(messages: list[dict[str, Any]], boundary: int) -> 
     return not pending
 
 
-def select_compaction_boundary(messages: list[dict[str, Any]], context_limit: int) -> int | None:
-    """选择保留近期尾部且不拆分工具调用链的消息边界。"""
-    if len(messages) <= 3:
+def task_block_starts(messages: list[dict[str, Any]]) -> list[int]:
+    """返回每个真实用户任务的起始位置，跳过内部摘要和 compact 命令。"""
+    starts: list[int] = []
+    for index, message in enumerate(messages[1:], start=1):
+        content = message.get("content")
+        if (
+            message.get("role") == "user"
+            and isinstance(content, str)
+            and content.strip() != "/compact"
+            and not content.lstrip().startswith(COMPACTION_TAG)
+        ):
+            starts.append(index)
+    return starts
+
+
+def align_boundary_to_task_start(task_starts: list[int], boundary: int) -> int:
+    """将消息边界向前对齐到完整任务块的开头。"""
+    for start in reversed(task_starts):
+        if start <= boundary:
+            return start
+    return task_starts[0]
+
+
+def select_compaction_boundary(
+    messages: list[dict[str, Any]],
+    context_limit: int,
+    keep_last_task_block: bool = False,
+) -> int | None:
+    """选择不拆分任务块和工具调用链的压缩边界。"""
+    task_starts = task_block_starts(messages)
+    if not task_starts:
         return None
-    retain_tokens = max(1, int(context_limit * CONTEXT_RETAIN_RATIO))
-    retained_tokens = 0
-    boundary = len(messages)
-    for index in range(len(messages) - 1, 0, -1):
-        retained_tokens += estimate_tokens(messages[index])
-        if retained_tokens >= retain_tokens:
-            boundary = index
-            break
+
+    if keep_last_task_block:
+        boundary = task_starts[-1]
+    else:
+        retain_tokens = max(1, int(context_limit * CONTEXT_RETAIN_RATIO))
+        retained_tokens = 0
+        candidate: int | None = None
+        for index in range(len(messages) - 1, 0, -1):
+            retained_tokens += estimate_tokens(messages[index])
+            if retained_tokens >= retain_tokens:
+                candidate = index
+                break
+        if candidate is None:
+            return None
+        boundary = align_boundary_to_task_start(task_starts, candidate)
+
     if boundary <= 1 or boundary >= len(messages):
         return None
-    while boundary > 1 and not prefix_has_balanced_tools(messages, boundary):
-        boundary -= 1
-    return boundary if boundary > 1 else None
+    boundaries = [boundary, *reversed([start for start in task_starts if start < boundary])]
+    for candidate in boundaries:
+        if candidate > 1 and prefix_has_balanced_tools(messages, candidate):
+            return candidate
+    return None
 
 
 def format_history_for_summary(messages: list[dict[str, Any]]) -> str:
@@ -351,15 +389,20 @@ def compact_history(
     config: Config,
     prompt_tokens: int | None,
     force: bool = False,
+    keep_last_task_block: bool = False,
 ) -> tuple[str, int, int] | None:
-    """在压力达到阈值时总结旧历史并原地替换，成功后才修改消息列表。"""
+    """总结旧历史并原地替换，成功后才修改消息列表。"""
     if config.context_limit is None:
         return None
     current_tokens = max(prompt_tokens or 0, estimate_request_tokens(messages))
     threshold = max(1, int(config.context_limit * CONTEXT_COMPACT_THRESHOLD))
     if not force and current_tokens < threshold:
         return None
-    boundary = select_compaction_boundary(messages, config.context_limit)
+    boundary = select_compaction_boundary(
+        messages,
+        config.context_limit,
+        keep_last_task_block=keep_last_task_block,
+    )
     if boundary is None:
         return None
     summary = summarize_history(messages[1:boundary], config)
@@ -399,6 +442,26 @@ def load_session_record(path: Path) -> dict[str, Any] | None:
         raise RuntimeError("session file has invalid message history")
     if messages[0].get("role") != "system":
         raise RuntimeError("session file has no system message")
+    context_messages = data.get("context_messages") if isinstance(data, dict) else None
+    if context_messages is None:
+        context_messages = [dict(message) for message in messages]
+    if (
+        not isinstance(context_messages, list)
+        or not context_messages
+        or not all(isinstance(item, dict) for item in context_messages)
+    ):
+        raise RuntimeError("session file has invalid context history")
+    if context_messages[0].get("role") != "system":
+        raise RuntimeError("session context has no system message")
+    for context_message in context_messages:
+        content = context_message.get("content")
+        if (
+            context_message.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(COMPACTION_TAG)
+            and not any(message == context_message for message in messages)
+        ):
+            messages.append(dict(context_message))
     prompt_tokens = data.get("prompt_tokens") if isinstance(data, dict) else None
     if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
         prompt_tokens = None
@@ -408,15 +471,16 @@ def load_session_record(path: Path) -> dict[str, Any] | None:
     record["created_at"] = record.get("created_at") if isinstance(record.get("created_at"), str) else ""
     record["updated_at"] = record.get("updated_at") if isinstance(record.get("updated_at"), str) else ""
     record["messages"] = messages
+    record["context_messages"] = context_messages
     record["prompt_tokens"] = prompt_tokens
     return record
 
 
-def load_session(path: Path) -> tuple[list[dict[str, Any]], int | None]:
+def load_session(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int | None]:
     record = load_session_record(path)
     if record is None:
-        return [], None
-    return record["messages"], record["prompt_tokens"]
+        return [], [], None
+    return record["messages"], record["context_messages"], record["prompt_tokens"]
 
 
 def session_title(messages: list[dict[str, Any]]) -> str:
@@ -429,7 +493,12 @@ def session_title(messages: list[dict[str, Any]]) -> str:
     return "New session"
 
 
-def save_session(path: Path, messages: list[dict[str, Any]], prompt_tokens: int | None) -> None:
+def save_session(
+    path: Path,
+    messages: list[dict[str, Any]],
+    context_messages: list[dict[str, Any]],
+    prompt_tokens: int | None,
+) -> None:
     existing = load_session_record(path) if path.is_file() else None
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     data = {
@@ -439,6 +508,7 @@ def save_session(path: Path, messages: list[dict[str, Any]], prompt_tokens: int 
         "created_at": existing["created_at"] if existing and existing["created_at"] else now,
         "updated_at": now,
         "messages": messages,
+        "context_messages": context_messages,
         "prompt_tokens": prompt_tokens,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -450,7 +520,7 @@ def create_session(root: Path, session_id: str) -> dict[str, Any]:
     if path.exists():
         raise FileExistsError("session already exists")
     messages = [{"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"}]
-    save_session(path, messages, None)
+    save_session(path, messages, messages, None)
     record = load_session_record(path)
     if record is None:
         raise RuntimeError("unable to create session")
@@ -891,6 +961,14 @@ def emit_compaction(
     })
 
 
+def append_compaction_marker(history_messages: list[dict[str, Any]], summary: str) -> None:
+    """在完整历史中记录供 Web 恢复显示的压缩摘要。"""
+    history_messages.append({
+        "role": "user",
+        "content": f"{COMPACTION_TAG}\n{summary}\n{COMPACTION_CLOSE_TAG}",
+    })
+
+
 def run_agent(
     task: str,
     root: Path,
@@ -900,19 +978,28 @@ def run_agent(
 ) -> int:
     # 一个任务由多个 step 组成：模型请求工具，工具结果回到历史后继续请求。
     if session_file is None:
-        messages: list[dict[str, Any]] = [
+        history_messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
         ]
+        messages = [dict(history_messages[0])]
         prompt_tokens = None
     else:
-        messages, prompt_tokens = load_session(session_file)
-        if not messages:
-            messages = [
+        history_messages, messages, prompt_tokens = load_session(session_file)
+        if not history_messages:
+            history_messages = [
                 {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
             ]
+        if not messages:
+            messages = [dict(history_messages[0])]
     if task == "/compact":
         try:
-            compacted = compact_history(messages, config, prompt_tokens, force=True)
+            compacted = compact_history(
+                messages,
+                config,
+                prompt_tokens,
+                force=True,
+                keep_last_task_block=True,
+            )
         except RuntimeError as exc:
             emit({"type": "error", "source": "context", "message": str(exc)})
             return 1
@@ -920,12 +1007,15 @@ def run_agent(
             emit({"type": "error", "source": "context", "message": "no earlier history can be compacted"})
             return 1
         emit_compaction(emit, compacted)
+        append_compaction_marker(history_messages, compacted[0])
         if session_file is not None:
-            save_session(session_file, messages, None)
+            save_session(session_file, history_messages, messages, None)
         return 0
-    messages.append({"role": "user", "content": task})
+    user_message = {"role": "user", "content": task}
+    history_messages.append(user_message)
+    messages.append(dict(user_message))
     if session_file is not None:
-        save_session(session_file, messages, prompt_tokens)
+        save_session(session_file, history_messages, messages, prompt_tokens)
     for step in range(1, config.max_steps + 1):
         try:
             compacted = compact_history(messages, config, prompt_tokens)
@@ -934,9 +1024,10 @@ def run_agent(
             return 1
         if compacted is not None:
             emit_compaction(emit, compacted)
+            append_compaction_marker(history_messages, compacted[0])
             prompt_tokens = None
             if session_file is not None:
-                save_session(session_file, messages, prompt_tokens)
+                save_session(session_file, history_messages, messages, prompt_tokens)
         emit({"type": "step", "step": step})
         # 获取模型的下一步决定；模型出错时结束当前任务。
         try:
@@ -951,9 +1042,10 @@ def run_agent(
                 emit({"type": "error", "source": "model", "message": str(exc)})
                 return 1
             emit_compaction(emit, compacted)
+            append_compaction_marker(history_messages, compacted[0])
             prompt_tokens = None
             if session_file is not None:
-                save_session(session_file, messages, prompt_tokens)
+                save_session(session_file, history_messages, messages, prompt_tokens)
             try:
                 message, prompt_tokens = request_model(messages, config, emit)
             except RuntimeError as retry_exc:
@@ -979,12 +1071,13 @@ def run_agent(
             assistant_message["reasoning_content"] = reasoning_content
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
+        history_messages.append(dict(assistant_message))
         messages.append(assistant_message)
 
         # 没有工具调用表示模型已经给出最终回答。
         if not tool_calls:
             if session_file is not None:
-                save_session(session_file, messages, prompt_tokens)
+                save_session(session_file, history_messages, messages, prompt_tokens)
             emit({"type": "final", "content": content, "streamed": bool(content)})
             return 0
 
@@ -1011,9 +1104,11 @@ def run_agent(
             result = clip(result, config.output_limit)
             emit({"type": "tool_result", "index": index, "name": name, "content": result})
             # 工具结果必须回到历史，模型才能根据执行结果继续工作。
-            messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
+            tool_message = {"role": "tool", "tool_call_id": call_id, "content": result}
+            history_messages.append(dict(tool_message))
+            messages.append(tool_message)
         if session_file is not None:
-            save_session(session_file, messages, prompt_tokens)
+            save_session(session_file, history_messages, messages, prompt_tokens)
 
     emit({"type": "stopped", "max_steps": config.max_steps})
     return 1

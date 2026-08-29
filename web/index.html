@@ -1294,7 +1294,7 @@
       emptyState.hidden = false;
       contextReported = false;
       updateContextLimit();
-      activity.scrollTop = 0;
+      activity.scrollTo({ top: 0, behavior: "instant" });
     }
 
     function loadMarkdownRenderer() {
@@ -1316,6 +1316,9 @@
               } else {
                 markdownBodies.delete(body);
               }
+            });
+            requestAnimationFrame(() => {
+              activity.scrollTo({ top: activity.scrollHeight, behavior: "instant" });
             });
           }
           return loaded;
@@ -1474,6 +1477,9 @@
       resetTimeline();
       const messages = Array.isArray(session.messages) ? session.messages : [];
       renderSessionHistory(messages);
+      requestAnimationFrame(() => {
+        activity.scrollTo({ top: activity.scrollHeight, behavior: "instant" });
+      });
       if (Number.isInteger(session.prompt_tokens) && session.prompt_tokens >= 0) {
         contextReported = true;
         contextValue.textContent = formatContextUsage(session.prompt_tokens);
@@ -1944,6 +1950,10 @@
         pendingToolEvent = null;
         streamedToolCalls = new Map();
         activeToolGroup = null;
+        if (Number.isInteger(event.after) && event.after >= 0) {
+          contextReported = true;
+          contextValue.textContent = formatContextUsage(event.after);
+        }
         const process = ensureProcess();
         appendProcessEvent(process, "compaction", "Context summary", event.content || "");
       } else if (event.type === "reasoning_delta") {
