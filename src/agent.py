@@ -133,6 +133,15 @@ MODEL_REASONING_EFFORTS = {
 }
 SESSION_DIR_NAME = "sessions"
 DEFAULT_SESSION_ID = "default"
+CONTEXT_COMPACT_THRESHOLD = 0.8
+CONTEXT_RETAIN_RATIO = 0.16
+COMPACTION_MAX_TOKENS = 2048
+COMPACTION_TAG = "<compacted-summary>"
+COMPACTION_CLOSE_TAG = "</compacted-summary>"
+
+
+class ContextOverflowError(RuntimeError):
+    """模型服务商确认请求超过上下文窗口。"""
 
 
 # 将模型请求和工具执行所需的可调参数集中保存。
@@ -192,6 +201,179 @@ def clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated at {limit} characters]"
+
+
+def estimate_tokens(value: Any) -> int:
+    """用保守的字符启发式估算 JSON 内容的 token 数。"""
+    serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    ascii_length = sum(character.isascii() for character in serialized)
+    return max(1, (ascii_length + 3) // 4 + len(serialized) - ascii_length)
+
+
+def estimate_request_tokens(messages: list[dict[str, Any]]) -> int:
+    """估算消息和固定工具定义在一次请求中占用的 token。"""
+    return estimate_tokens(messages) + estimate_tokens(TOOLS + [WEB_SEARCH_TOOL]) + 256
+
+
+def prefix_has_balanced_tools(messages: list[dict[str, Any]], boundary: int) -> bool:
+    """确认压缩边界前的 assistant 工具调用都已有对应结果。"""
+    pending: set[str] = set()
+    for message in messages[1:boundary]:
+        if message.get("role") == "assistant":
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]:
+                    return False
+                pending.add(call["id"])
+        elif message.get("role") == "tool":
+            call_id = message.get("tool_call_id")
+            if not isinstance(call_id, str) or call_id not in pending:
+                return False
+            pending.remove(call_id)
+    return not pending
+
+
+def select_compaction_boundary(messages: list[dict[str, Any]], context_limit: int) -> int | None:
+    """选择保留近期尾部且不拆分工具调用链的消息边界。"""
+    if len(messages) <= 3:
+        return None
+    retain_tokens = max(1, int(context_limit * CONTEXT_RETAIN_RATIO))
+    retained_tokens = 0
+    boundary = len(messages)
+    for index in range(len(messages) - 1, 0, -1):
+        retained_tokens += estimate_tokens(messages[index])
+        if retained_tokens >= retain_tokens:
+            boundary = index
+            break
+    if boundary <= 1 or boundary >= len(messages):
+        return None
+    while boundary > 1 and not prefix_has_balanced_tools(messages, boundary):
+        boundary -= 1
+    return boundary if boundary > 1 else None
+
+
+def format_history_for_summary(messages: list[dict[str, Any]]) -> str:
+    """把待压缩消息转换成摘要模型容易读取的纯文本。"""
+    sections: list[str] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if role == "user":
+            sections.append(f"User:\n{content}")
+        elif role == "assistant":
+            lines = [f"Assistant:\n{content}" if content else "Assistant:"]
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for call in tool_calls:
+                    if not isinstance(call, dict):
+                        continue
+                    function = call.get("function")
+                    if not isinstance(function, dict):
+                        continue
+                    name = function.get("name", "")
+                    arguments = function.get("arguments", "{}")
+                    lines.append(f"Tool request: {name}\n{arguments}")
+            sections.append("\n".join(lines))
+        elif role == "tool":
+            sections.append(f"Tool result ({message.get('tool_call_id', '')}):\n{content}")
+    return "\n\n".join(sections)
+
+
+def summarize_history(messages: list[dict[str, Any]], config: Config) -> str:
+    """用一次无工具模型请求生成可继续工作的历史检查点。"""
+    instruction = """Summarize the earlier coding-agent history below into a concise Markdown checkpoint.
+Keep exact file paths, changes, commands, errors, current state, and the next useful action.
+Use these sections: ## Request, ## Files and changes, ## Commands and results, ## Current state, ## Next step.
+Do not mention this summarization instruction. Output only the checkpoint Markdown."""
+    payload: dict[str, Any] = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": "You summarize coding-agent history accurately and briefly."},
+            {"role": "user", "content": f"{instruction}\n\n{format_history_for_summary(messages)}"},
+        ],
+        "max_tokens": COMPACTION_MAX_TOKENS,
+        "stream": False,
+    }
+    if config.reasoning_effort == "off":
+        payload["thinking"] = {"type": "disabled"}
+    elif config.reasoning_effort is not None:
+        payload["thinking"] = {"type": "enabled"}
+        payload["reasoning_effort"] = MODEL_REASONING_EFFORTS[config.model][config.reasoning_effort]
+    request = urllib.request.Request(
+        f"{config.base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.model_timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"context compaction API returned HTTP {exc.code}: {clip(detail, 1000)}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"context compaction request failed: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("context compaction API returned invalid JSON") from exc
+    except UnicodeError as exc:
+        raise RuntimeError("context compaction API returned invalid UTF-8") from exc
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    message = choice.get("message") if isinstance(choice, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("context compaction API returned an empty summary")
+    return content.strip()
+
+
+def is_context_overflow(detail: str) -> bool:
+    """识别服务商返回的上下文窗口超限错误。"""
+    text = detail.lower()
+    return any(marker in text for marker in (
+        "context_length_exceeded",
+        "maximum context length",
+        "context window",
+        "prompt is too long",
+        "too many tokens",
+    ))
+
+
+def compact_history(
+    messages: list[dict[str, Any]],
+    config: Config,
+    prompt_tokens: int | None,
+    force: bool = False,
+) -> tuple[str, int, int] | None:
+    """在压力达到阈值时总结旧历史并原地替换，成功后才修改消息列表。"""
+    if config.context_limit is None:
+        return None
+    current_tokens = max(prompt_tokens or 0, estimate_request_tokens(messages))
+    threshold = max(1, int(config.context_limit * CONTEXT_COMPACT_THRESHOLD))
+    if not force and current_tokens < threshold:
+        return None
+    boundary = select_compaction_boundary(messages, config.context_limit)
+    if boundary is None:
+        return None
+    summary = summarize_history(messages[1:boundary], config)
+    summary_message = {
+        "role": "user",
+        "content": f"{COMPACTION_TAG}\n{summary}\n{COMPACTION_CLOSE_TAG}",
+    }
+    compacted = [messages[0], summary_message, *messages[boundary:]]
+    before_tokens = estimate_request_tokens(messages)
+    after_tokens = estimate_request_tokens(compacted)
+    if after_tokens >= before_tokens:
+        return None
+    messages[:] = compacted
+    return summary, before_tokens, after_tokens
 
 
 def session_path(root: Path, session_id: str) -> Path:
@@ -621,6 +803,10 @@ def request_model(
                 return consume_model_stream(response, emit, stream_status)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            if is_context_overflow(detail):
+                raise ContextOverflowError(
+                    f"model context window exceeded: {clip(detail, 1000)}",
+                ) from exc
             raise RuntimeError(f"model API returned HTTP {exc.code}: {clip(detail, 1000)}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             if stream_status["started"] or attempt == config.model_retries:
@@ -669,6 +855,10 @@ def print_event(event: dict[str, Any]) -> None:
             print("Context left: not reported")
         else:
             print(f"Context left: {max(limit - tokens, 0):,} tokens")
+    elif event_type == "compaction":
+        print(
+            f"\nContext compacted: {event['before']:,} -> {event['after']:,} estimated tokens.",
+        )
     elif event_type == "tool_call_delta":
         if event.get("name"):
             print(f"\nTool call: {event['name']} ", end="", flush=True)
@@ -685,6 +875,20 @@ def print_event(event: dict[str, Any]) -> None:
         print(f"{event['source'].title()} error: {event['message']}")
     elif event_type == "stopped":
         print(f"Stopped after {event['max_steps']} steps.")
+
+
+def emit_compaction(
+    emit: Callable[[dict[str, Any]], None],
+    compacted: tuple[str, int, int],
+) -> None:
+    """显示一次上下文压缩事件。"""
+    summary, before_tokens, after_tokens = compacted
+    emit({
+        "type": "compaction",
+        "content": summary,
+        "before": before_tokens,
+        "after": after_tokens,
+    })
 
 
 def run_agent(
@@ -706,14 +910,55 @@ def run_agent(
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
             ]
+    if task == "/compact":
+        try:
+            compacted = compact_history(messages, config, prompt_tokens, force=True)
+        except RuntimeError as exc:
+            emit({"type": "error", "source": "context", "message": str(exc)})
+            return 1
+        if compacted is None:
+            emit({"type": "error", "source": "context", "message": "no earlier history can be compacted"})
+            return 1
+        emit_compaction(emit, compacted)
+        if session_file is not None:
+            save_session(session_file, messages, None)
+        return 0
     messages.append({"role": "user", "content": task})
     if session_file is not None:
         save_session(session_file, messages, prompt_tokens)
     for step in range(1, config.max_steps + 1):
+        try:
+            compacted = compact_history(messages, config, prompt_tokens)
+        except RuntimeError as exc:
+            emit({"type": "error", "source": "context", "message": str(exc)})
+            return 1
+        if compacted is not None:
+            emit_compaction(emit, compacted)
+            prompt_tokens = None
+            if session_file is not None:
+                save_session(session_file, messages, prompt_tokens)
         emit({"type": "step", "step": step})
         # 获取模型的下一步决定；模型出错时结束当前任务。
         try:
             message, prompt_tokens = request_model(messages, config, emit)
+        except ContextOverflowError as exc:
+            try:
+                compacted = compact_history(messages, config, prompt_tokens, force=True)
+            except RuntimeError as compact_exc:
+                emit({"type": "error", "source": "context", "message": str(compact_exc)})
+                return 1
+            if compacted is None:
+                emit({"type": "error", "source": "model", "message": str(exc)})
+                return 1
+            emit_compaction(emit, compacted)
+            prompt_tokens = None
+            if session_file is not None:
+                save_session(session_file, messages, prompt_tokens)
+            try:
+                message, prompt_tokens = request_model(messages, config, emit)
+            except RuntimeError as retry_exc:
+                emit({"type": "error", "source": "model", "message": str(retry_exc)})
+                return 1
         except RuntimeError as exc:
             emit({"type": "error", "source": "model", "message": str(exc)})
             return 1

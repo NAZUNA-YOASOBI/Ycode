@@ -448,6 +448,15 @@
       border-bottom: 1px solid var(--line-soft);
     }
 
+    .event.compaction {
+      border-left-color: #6fb5a4;
+      background: #182725;
+    }
+
+    .event.compaction > summary {
+      color: #9ed8c8;
+    }
+
     .event.user {
       border-left-color: #8f9489;
     }
@@ -1651,12 +1660,13 @@
     }
 
     function createEvent(kind, title, content) {
-      const item = document.createElement(kind === "reasoning" ? "details" : "article");
+      const collapsible = kind === "reasoning" || kind === "compaction";
+      const item = document.createElement(collapsible ? "details" : "article");
       item.className = `event ${kind}`;
       const body = document.createElement("div");
       body.className = "event-body markdown-body";
       renderMarkdown(body, content);
-      item.append(createEventHeader(kind === "reasoning" ? "summary" : "div", title), body);
+      item.append(createEventHeader(collapsible ? "summary" : "div", title), body);
       return item;
     }
 
@@ -1845,10 +1855,22 @@
           return;
         }
         if (message.role === "user") {
+          const content = typeof message.content === "string" ? message.content : "";
+          if (content.startsWith("<compacted-summary>")) {
+            const summary = content
+              .slice("<compacted-summary>".length)
+              .replace(/<\/compacted-summary>\s*$/, "")
+              .trim();
+            toolGroup = null;
+            toolEvents.clear();
+            process = process || createProcess();
+            appendProcessEvent(process, "compaction", "Context summary", summary);
+            return;
+          }
           process = null;
           toolGroup = null;
           toolEvents.clear();
-          appendEvent("user", "User task", typeof message.content === "string" ? message.content : "");
+          appendEvent("user", "User task", content);
           return;
         }
         if (message.role === "assistant") {
@@ -1916,6 +1938,14 @@
         contextReported = true;
         contextLimit = Number.isInteger(event.limit) && event.limit > 0 ? event.limit : null;
         contextValue.textContent = formatContextUsage(event.tokens);
+      } else if (event.type === "compaction") {
+        activeTextStream = null;
+        pendingModelStream = null;
+        pendingToolEvent = null;
+        streamedToolCalls = new Map();
+        activeToolGroup = null;
+        const process = ensureProcess();
+        appendProcessEvent(process, "compaction", "Context summary", event.content || "");
       } else if (event.type === "reasoning_delta") {
         appendReasoningDelta(event.content || "");
       } else if (event.type === "model_delta") {
@@ -2047,7 +2077,9 @@
       taskInput.disabled = true;
       setSessionControls(true);
       emptyState.hidden = true;
-      appendEvent("user", "User task", task);
+      if (task !== "/compact") {
+        appendEvent("user", "User task", task);
+      }
       taskInput.value = "";
       resizeInput();
       contextReported = false;
