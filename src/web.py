@@ -64,6 +64,9 @@ def session_public(record: dict[str, Any], include_messages: bool = True) -> dic
     }
     if include_messages:
         data["messages"] = messages[1:]
+        display_events = record.get("display_events")
+        if isinstance(display_events, list):
+            data["display_events"] = display_events
     return data
 
 

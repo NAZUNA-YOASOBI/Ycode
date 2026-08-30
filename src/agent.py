@@ -453,6 +453,108 @@ def compact_history(
     return summary, before_tokens, after_tokens
 
 
+def append_display_event(events: list[dict[str, Any]], event: dict[str, Any]) -> None:
+    """保存展示事件，并合并相邻的流式文本片段。"""
+    item = dict(event)
+    event_type = item.get("type")
+    if events and event_type in {"reasoning_delta", "model_delta"}:
+        previous = events[-1]
+        if previous.get("type") == event_type:
+            previous["content"] = str(previous.get("content", "")) + str(item.get("content", ""))
+            return
+    if events and event_type == "tool_call_delta":
+        previous = events[-1]
+        if previous.get("type") == event_type and previous.get("index") == item.get("index"):
+            for key in ("name", "arguments"):
+                if key in item:
+                    previous[key] = str(previous.get(key, "")) + str(item[key])
+            if item.get("id"):
+                previous["id"] = item["id"]
+            return
+    events.append(item)
+
+
+class DisplayEventRecorder:
+    """把事件同时发送给终端或 Web，并记录到 session。"""
+
+    def __init__(self, emit: Callable[[dict[str, Any]], None], events: list[dict[str, Any]]):
+        self.emit = emit
+        self.events = events
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        append_display_event(self.events, event)
+        self.emit(event)
+
+
+def build_display_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """从旧 session 的标准消息生成展示事件，兼容新增的事件日志。"""
+    events: list[dict[str, Any]] = []
+    step = 0
+    tool_indexes: dict[str, int] = {}
+    for message in messages[1:]:
+        role = message.get("role")
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if role == "user":
+            if content == "/compact":
+                append_display_event(events, {"type": "user_command", "content": content})
+            elif content.startswith(COMPACTION_TAG):
+                summary = content[len(COMPACTION_TAG):]
+                summary = summary.removesuffix(COMPACTION_CLOSE_TAG).strip()
+                append_display_event(events, {"type": "compaction", "content": summary})
+            else:
+                step = 0
+                tool_indexes = {}
+                append_display_event(events, {"type": "user_task", "content": content})
+            continue
+        if role == "assistant":
+            step += 1
+            append_display_event(events, {"type": "step", "step": step})
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                append_display_event(events, {"type": "reasoning_delta", "content": reasoning})
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list) or not tool_calls:
+                if content:
+                    append_display_event(events, {"type": "final", "content": content, "streamed": False})
+                continue
+            if content:
+                append_display_event(events, {"type": "model_delta", "content": content})
+            tool_indexes = {}
+            for index, call in enumerate(tool_calls):
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = function.get("name") if isinstance(function.get("name"), str) else ""
+                arguments = function.get("arguments", "{}")
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                event = {
+                    "type": "tool_call_delta",
+                    "index": index,
+                    "name": name,
+                    "arguments": arguments,
+                }
+                call_id = call.get("id")
+                if isinstance(call_id, str) and call_id:
+                    event["id"] = call_id
+                    tool_indexes[call_id] = index
+                append_display_event(events, event)
+            continue
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and call_id in tool_indexes:
+                append_display_event(events, {
+                    "type": "tool_result",
+                    "index": tool_indexes[call_id],
+                    "content": content,
+                })
+    return events
+
+
 def session_path(root: Path, session_id: str) -> Path:
     if (
         not isinstance(session_id, str)
@@ -496,6 +598,14 @@ def load_session_record(path: Path) -> dict[str, Any] | None:
             and not any(message == context_message for message in messages)
         ):
             messages.append(dict(context_message))
+    display_events = data.get("display_events") if isinstance(data, dict) else None
+    if display_events is not None and (
+        not isinstance(display_events, list)
+        or not all(isinstance(item, dict) for item in display_events)
+    ):
+        raise RuntimeError("session file has invalid display events")
+    if display_events is None:
+        display_events = build_display_events(messages)
     prompt_tokens = data.get("prompt_tokens") if isinstance(data, dict) else None
     if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
         prompt_tokens = None
@@ -506,15 +616,23 @@ def load_session_record(path: Path) -> dict[str, Any] | None:
     record["updated_at"] = record.get("updated_at") if isinstance(record.get("updated_at"), str) else ""
     record["messages"] = messages
     record["context_messages"] = context_messages
+    record["display_events"] = display_events
     record["prompt_tokens"] = prompt_tokens
     return record
 
 
-def load_session(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int | None]:
+def load_session(
+    path: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int | None, list[dict[str, Any]]]:
     record = load_session_record(path)
     if record is None:
-        return [], [], None
-    return record["messages"], record["context_messages"], record["prompt_tokens"]
+        return [], [], None, []
+    return (
+        record["messages"],
+        record["context_messages"],
+        record["prompt_tokens"],
+        record["display_events"],
+    )
 
 
 def session_title(messages: list[dict[str, Any]]) -> str:
@@ -532,8 +650,11 @@ def save_session(
     messages: list[dict[str, Any]],
     context_messages: list[dict[str, Any]],
     prompt_tokens: int | None,
+    display_events: list[dict[str, Any]] | None = None,
 ) -> None:
     existing = load_session_record(path) if path.is_file() else None
+    if display_events is None and existing is not None:
+        display_events = existing["display_events"]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     data = {
         "version": 1,
@@ -544,6 +665,7 @@ def save_session(
         "messages": messages,
         "context_messages": context_messages,
         "prompt_tokens": prompt_tokens,
+        "display_events": display_events if display_events is not None else build_display_events(messages),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -554,7 +676,7 @@ def create_session(root: Path, session_id: str) -> dict[str, Any]:
     if path.exists():
         raise FileExistsError("session already exists")
     messages = [{"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"}]
-    save_session(path, messages, messages, None)
+    save_session(path, messages, messages, None, [])
     record = load_session_record(path)
     if record is None:
         raise RuntimeError("unable to create session")
@@ -1013,7 +1135,9 @@ def parse_tool_call(call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
 
 def print_event(event: dict[str, Any]) -> None:
     event_type = event["type"]
-    if event_type == "step":
+    if event_type == "user_task":
+        print(f"User task: {event['content']}")
+    elif event_type == "step":
         print(f"\n[step {event['step']}]")
     elif event_type in {"reasoning_delta", "model_delta"}:
         print(event["content"], end="", flush=True)
@@ -1030,6 +1154,8 @@ def print_event(event: dict[str, Any]) -> None:
         print(
             f"\nContext compacted: {event['before']:,} -> {event['after']:,} estimated tokens.",
         )
+    elif event_type == "user_command":
+        print(f"User command: {event['content']}")
     elif event_type == "tool_call_delta":
         if event.get("name"):
             print(f"\nTool call: {event['name']} ", end="", flush=True)
@@ -1084,15 +1210,21 @@ def run_agent(
         ]
         messages = [dict(history_messages[0])]
         prompt_tokens = None
+        display_events: list[dict[str, Any]] = []
     else:
-        history_messages, messages, prompt_tokens = load_session(session_file)
+        history_messages, messages, prompt_tokens, display_events = load_session(session_file)
         if not history_messages:
             history_messages = [
                 {"role": "system", "content": SYSTEM_PROMPT + f"\nWorkspace: {root}"},
             ]
         if not messages:
             messages = [dict(history_messages[0])]
+    emit = DisplayEventRecorder(emit, display_events)
     if task == "/compact":
+        history_messages.append({"role": "user", "content": task})
+        emit({"type": "user_command", "content": task})
+        if session_file is not None:
+            save_session(session_file, history_messages, messages, prompt_tokens, display_events)
         try:
             compacted = compact_history(
                 messages,
@@ -1103,32 +1235,39 @@ def run_agent(
             )
         except RuntimeError as exc:
             emit({"type": "error", "source": "context", "message": str(exc)})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 1
         if compacted is None:
             emit({"type": "error", "source": "context", "message": "no earlier history can be compacted"})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 1
         emit_compaction(emit, compacted)
         append_compaction_marker(history_messages, compacted[0])
         if session_file is not None:
-            save_session(session_file, history_messages, messages, None)
+            save_session(session_file, history_messages, messages, None, display_events)
         return 0
     user_message = {"role": "user", "content": task}
     history_messages.append(user_message)
     messages.append(dict(user_message))
+    emit({"type": "user_task", "content": task})
     if session_file is not None:
-        save_session(session_file, history_messages, messages, prompt_tokens)
+        save_session(session_file, history_messages, messages, prompt_tokens, display_events)
     for step in range(1, config.max_steps + 1):
         try:
             compacted = compact_history(messages, config, prompt_tokens)
         except RuntimeError as exc:
             emit({"type": "error", "source": "context", "message": str(exc)})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 1
         if compacted is not None:
             emit_compaction(emit, compacted)
             append_compaction_marker(history_messages, compacted[0])
             prompt_tokens = None
             if session_file is not None:
-                save_session(session_file, history_messages, messages, prompt_tokens)
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
         emit({"type": "step", "step": step})
         # 获取模型的下一步决定；模型出错时结束当前任务。
         try:
@@ -1138,22 +1277,30 @@ def run_agent(
                 compacted = compact_history(messages, config, prompt_tokens, force=True)
             except RuntimeError as compact_exc:
                 emit({"type": "error", "source": "context", "message": str(compact_exc)})
+                if session_file is not None:
+                    save_session(session_file, history_messages, messages, prompt_tokens, display_events)
                 return 1
             if compacted is None:
                 emit({"type": "error", "source": "model", "message": str(exc)})
+                if session_file is not None:
+                    save_session(session_file, history_messages, messages, prompt_tokens, display_events)
                 return 1
             emit_compaction(emit, compacted)
             append_compaction_marker(history_messages, compacted[0])
             prompt_tokens = None
             if session_file is not None:
-                save_session(session_file, history_messages, messages, prompt_tokens)
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             try:
                 message, prompt_tokens = request_model(messages, config, emit)
             except RuntimeError as retry_exc:
                 emit({"type": "error", "source": "model", "message": str(retry_exc)})
+                if session_file is not None:
+                    save_session(session_file, history_messages, messages, prompt_tokens, display_events)
                 return 1
         except RuntimeError as exc:
             emit({"type": "error", "source": "model", "message": str(exc)})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 1
         emit({"type": "context", "tokens": prompt_tokens, "limit": config.context_limit})
 
@@ -1163,6 +1310,8 @@ def run_agent(
         tool_calls = message.get("tool_calls") or []
         if not isinstance(tool_calls, list):
             emit({"type": "error", "source": "model", "message": "tool_calls has an invalid format"})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 1
 
         # 先保存模型消息，保证下一次请求能看到完整上下文。
@@ -1177,20 +1326,24 @@ def run_agent(
 
         # 没有工具调用表示模型已经给出最终回答。
         if not tool_calls:
-            if session_file is not None:
-                save_session(session_file, history_messages, messages, prompt_tokens)
             emit({"type": "final", "content": content, "streamed": bool(content)})
+            if session_file is not None:
+                save_session(session_file, history_messages, messages, prompt_tokens, display_events)
             return 0
 
         # 一个响应可以包含多个工具调用，逐个执行并记录结果。
         for index, call in enumerate(tool_calls):
             if not isinstance(call, dict):
                 emit({"type": "error", "source": "tool", "message": "tool call has an invalid format"})
+                if session_file is not None:
+                    save_session(session_file, history_messages, messages, prompt_tokens, display_events)
                 return 1
             try:
                 call_id, name, arguments = parse_tool_call(call)
             except ValueError as exc:
                 emit({"type": "error", "source": "tool", "message": str(exc)})
+                if session_file is not None:
+                    save_session(session_file, history_messages, messages, prompt_tokens, display_events)
                 return 1
             emit({
                 "type": "tool_call_complete",
@@ -1209,9 +1362,11 @@ def run_agent(
             history_messages.append(dict(tool_message))
             messages.append(tool_message)
         if session_file is not None:
-            save_session(session_file, history_messages, messages, prompt_tokens)
+            save_session(session_file, history_messages, messages, prompt_tokens, display_events)
 
     emit({"type": "stopped", "max_steps": config.max_steps})
+    if session_file is not None:
+        save_session(session_file, history_messages, messages, prompt_tokens, display_events)
     return 1
 
 

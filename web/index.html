@@ -431,6 +431,10 @@
       border-left-color: #77a6bf;
     }
 
+    .event.model > summary {
+      color: #9bc3d8;
+    }
+
     .event.reasoning {
       border-left-color: #79a7d3;
       background: #1c222b;
@@ -459,6 +463,15 @@
 
     .event.user {
       border-left-color: #8f9489;
+    }
+
+    .event.command {
+      border-left-color: #72b7bc;
+      background: #1a2729;
+    }
+
+    .event.command .event-header {
+      color: #a8d3d0;
     }
 
     .event.tool-group {
@@ -1476,7 +1489,11 @@
       resizeInput();
       resetTimeline();
       const messages = Array.isArray(session.messages) ? session.messages : [];
-      renderSessionHistory(messages);
+      if (Array.isArray(session.display_events)) {
+        renderDisplayEvents(session.display_events);
+      } else {
+        renderSessionHistory(messages);
+      }
       requestAnimationFrame(() => {
         activity.scrollTo({ top: activity.scrollHeight, behavior: "instant" });
       });
@@ -1666,7 +1683,7 @@
     }
 
     function createEvent(kind, title, content) {
-      const collapsible = kind === "reasoning" || kind === "compaction";
+      const collapsible = kind === "reasoning" || kind === "compaction" || kind === "model";
       const item = document.createElement(collapsible ? "details" : "article");
       item.className = `event ${kind}`;
       const body = document.createElement("div");
@@ -1728,6 +1745,14 @@
       if (!stream || stream.inProcess) {
         return;
       }
+      if (stream.item.tagName !== "DETAILS") {
+        const details = document.createElement("details");
+        details.className = stream.item.className;
+        const summary = createEventHeader("summary", "Model reply");
+        details.append(summary, stream.body);
+        stream.item.replaceWith(details);
+        stream.item = details;
+      }
       const process = ensureProcess();
       flushPendingSteps(process);
       process.body.append(stream.item);
@@ -1749,11 +1774,18 @@
     }
 
     function appendModelDelta(content) {
+      const followsToolCall = streamedToolCalls.size > 0 || Boolean(activeToolGroup);
       if (!activeTextStream || activeTextStream.kind !== "model") {
         activeToolGroup = null;
       }
       if (!pendingModelStream) {
-        pendingModelStream = createStreamEvent("final", "Final answer", timeline);
+        if (followsToolCall) {
+          const process = ensureProcess();
+          flushPendingSteps(process);
+          pendingModelStream = createStreamEvent("model", "Model reply", process.body);
+        } else {
+          pendingModelStream = createStreamEvent("final", "Final answer", timeline);
+        }
       }
       activeTextStream = pendingModelStream;
       appendStreamContent(pendingModelStream, content);
@@ -1862,6 +1894,13 @@
         }
         if (message.role === "user") {
           const content = typeof message.content === "string" ? message.content : "";
+          if (content === "/compact") {
+            process = null;
+            toolGroup = null;
+            toolEvents.clear();
+            appendEvent("command", "User command", content);
+            return;
+          }
           if (content.startsWith("<compacted-summary>")) {
             const summary = content
               .slice("<compacted-summary>".length)
@@ -1932,8 +1971,37 @@
       }
     }
 
+    function renderDisplayEvents(events) {
+      events.forEach((event) => {
+        if (event && typeof event === "object") {
+          renderEvent(event);
+        }
+      });
+      if (events.length) {
+        emptyState.hidden = true;
+      }
+    }
+
     function renderEvent(event) {
-      if (event.type === "step") {
+      if (event.type === "user_task") {
+        activeProcess = null;
+        activeTextStream = null;
+        pendingToolSteps = [];
+        pendingModelStream = null;
+        pendingToolEvent = null;
+        streamedToolCalls = new Map();
+        activeToolGroup = null;
+        appendEvent("user", "User task", event.content || "");
+      } else if (event.type === "user_command") {
+        activeProcess = null;
+        activeTextStream = null;
+        pendingToolSteps = [];
+        pendingModelStream = null;
+        pendingToolEvent = null;
+        streamedToolCalls = new Map();
+        activeToolGroup = null;
+        appendEvent("command", "User command", event.content || "");
+      } else if (event.type === "step") {
         activeTextStream = null;
         pendingModelStream = null;
         pendingToolEvent = null;
@@ -2087,9 +2155,6 @@
       taskInput.disabled = true;
       setSessionControls(true);
       emptyState.hidden = true;
-      if (task !== "/compact") {
-        appendEvent("user", "User task", task);
-      }
       taskInput.value = "";
       resizeInput();
       contextReported = false;
