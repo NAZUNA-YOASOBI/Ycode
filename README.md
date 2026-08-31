@@ -1,11 +1,11 @@
 # Ycode
 
-Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容接口与大语言模型交互，由本地程序执行文件操作和命令，并把执行结果继续交给模型，直到任务完成。
+Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容接口与大语言模型交互，由本地程序执行文件操作和命令，并把执行结果继续交给模型，直到任务完成、发生错误或达到步数上限。
 
 ## 功能
 
 - `glob`、`grep`、`read_file`、`list_files`、`write_file`、`replace_text`：受工作目录限制的本地文件工具。
-- `run_command`：在工作目录中执行命令，并限制运行时间。
+- `run_command`：以工作目录为当前目录执行命令，并限制运行时间。
 - `web_search`：调用 DeepSeek 服务端原生网页搜索。
 - Agent 循环：解析模型回复、执行工具、保存结果并继续请求模型。
 - 流式响应：按 SSE 增量显示推理、正文和工具调用参数。
@@ -13,8 +13,8 @@ Ycode 是一个用 Python 编写的最小 coding agent。它通过 OpenAI 兼容
 - 推理等级：已知 DeepSeek V4 模型可选择 `Off`、`Low`、`High`、`Max`，默认由提供商决定。
 - 思考过程：显示模型返回的 `reasoning_content`，支持 Markdown 渲染，并与工具调用按实际顺序归入可折叠的工作过程。
 - 上下文显示：根据模型上限和 `prompt_tokens` 显示当前占用情况。
-- 上下文压缩：达到压力阈值时摘要较早历史，保留近期工具链；服务端超限后压缩并重试一次。
-- 主动压缩：输入 `/compact` 可直接压缩当前会话历史，不调用模型。
+- 上下文压缩：已知上下文上限且达到压力阈值时摘要较早历史，保留近期工具链；服务端超限后压缩并重试一次。
+- 主动压缩：输入 `/compact` 可直接压缩当前会话历史，不调用主 Agent，仅请求一次摘要模型。
 - Web 工作台：实时显示运行过程，并支持历史会话切换。
 - 会话持久化：每个会话保存在 `sessions/` 下的独立 JSON 文件中。
 
@@ -85,3 +85,12 @@ requirement/                 题目要求
 ```
 
 模型只负责决定下一步操作；文件读写、命令执行、会话管理和循环控制都由本地代码完成。
+
+## 界面截图
+
+![Ycode Web 界面](figs/image.png)
+![Ycode Web 界面](figs/image2.png)
+![Ycode Web 界面](figs/image3.png)
+![Ycode Web 界面](figs/image4.png)
+![Ycode Web 界面](figs/image5.png)
+![Ycode Web 界面](figs/image6.png)
